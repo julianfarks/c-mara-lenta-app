@@ -5,6 +5,10 @@ import com.farks.autopilot.models.Detection
 import com.farks.autopilot.models.Lane
 import com.farks.autopilot.models.PlayerObservation
 import com.farks.autopilot.models.RectN
+import com.farks.autopilot.player.PlayerLearnResult
+import com.farks.autopilot.player.PlayerLocator
+import com.farks.autopilot.player.PlayerLookLearner
+import com.farks.autopilot.player.WorkGrid
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
@@ -28,9 +32,6 @@ data class DetectorParams(
     val workWidth: Int = 0,
     /** Píxeles de trabajo que debe tener el carril en su borde lejano en el modo automático. */
     val farLanePx: Int = 18,
-    /** Tolerancias (Lab) para reconocer el color del vehículo del jugador. */
-    val playerTolL: Float = 34f,
-    val playerTolC: Float = 26f,
     /** Fracción del ancho del carril que se recorta a cada lado para no unir carriles vecinos. */
     val laneShrink: Float = 0.12f,
     val minWidthLane: Float = 0.30f,
@@ -68,7 +69,9 @@ class OpenCvObstacleDetector(
     private val road = profile.road
     private val cropTop = road.farY + 0.002f
     private val obstBottom = profile.playerBox.top - 0.004f
-    private val regionBottom = profile.playerBox.bottom
+    /** Se analiza hasta por debajo de la caja: el coche suele sobresalir (parachoques, ruedas). */
+    private val regionBottom = profile.playerZoneBottom
+    private val locator: PlayerLocator? = profile.playerLook?.let { PlayerLocator(profile.road, profile.playerBox, regionBottom, it) }
     private val x0n = (road.leftX(regionBottom) - 0.02f).coerceAtLeast(0f)
     private val x1n = (road.rightX(regionBottom) + 0.02f).coerceAtMost(1f)
 
@@ -92,9 +95,10 @@ class OpenCvObstacleDetector(
         require(x1n > x0n + 0.1f) { "Zona de carretera inválida: recalibre." }
     }
 
-    /** @param frame captura completa, RGBA/RGB de 8 bits. */
-    fun detect(frame: Mat): DetectorResult {
-        val t0 = System.nanoTime()
+    private class Prepared(val data: ByteArray, val mask: ByteArray, val ww: Int, val wh: Int, val ph: Float)
+
+    /** Recorta, reduce y convierte a Lab, y calcula la máscara de desviación respecto a la carretera vacía. */
+    private fun prepare(frame: Mat): Prepared {
         val fx0 = (x0n * frame.cols()).toInt().coerceIn(0, frame.cols() - 2)
         val fx1 = (x1n * frame.cols()).toInt().coerceIn(fx0 + 1, frame.cols())
         val fy0 = (cropTop * frame.rows()).toInt().coerceIn(0, frame.rows() - 2)
@@ -136,9 +140,30 @@ class OpenCvObstacleDetector(
                 if (dl > e[3] || da * da + db * db > e[4] * e[4]) mask[base + c] = -1 // 255
             }
         }
+        return Prepared(data, mask, ww, wh, ph)
+    }
 
-        val player = if (profile.playerColor != null) locatePlayerByColor(data, ww, wh, ph, profile.playerColor!!)
-        else locatePlayer(mask, ww, wh, ph)
+    private fun grid(p: Prepared) = WorkGrid(p.data, p.mask, p.ww, p.wh, x0n, x1n, cropTop, regionBottom)
+
+    /**
+     * Aprende la apariencia del vehículo del jugador (carril calibrado) con EXACTAMENTE la misma preparación de
+     * imagen que usa [detect], de modo que lo aprendido y lo verificado comparten coordenadas y escala.
+     */
+    fun learnPlayer(frame: Mat): PlayerLearnResult {
+        val p = prepare(frame)
+        return PlayerLookLearner.learn(grid(p), road, profile.playerBox, regionBottom, profile.playerLane)
+    }
+
+    /** Qué ve el detector (máscara de no-asfalto, en el espacio normalizado de la captura) para el diagnóstico. */
+    fun foregroundMask(frame: Mat): Triple<ByteArray, Int, Int> { val p = prepare(frame); return Triple(p.mask, p.ww, p.wh) }
+
+    /** @param frame captura completa, RGBA/RGB de 8 bits. */
+    fun detect(frame: Mat): DetectorResult {
+        val t0 = System.nanoTime()
+        val prep = prepare(frame)
+        val data = prep.data; val mask = prep.mask; val ww = prep.ww; val wh = prep.wh; val ph = prep.ph
+
+        val player = locator?.locate(grid(prep)) ?: locatePlayer(mask, ww, wh, ph)
 
         val obstRows = min(wh, ((obstBottom - cropTop) * ph).toInt())
         val maskMat = Mat(obstRows, ww, CvType.CV_8UC1)
@@ -229,44 +254,6 @@ class OpenCvObstacleDetector(
         }
         return if (bestLane != null && bestFrac >= params.playerMinForeground) {
             PlayerObservation(bestLane, bestFrac.coerceAtMost(1f))
-        } else PlayerObservation(null, 0f)
-    }
-
-    /**
-     * Carril del jugador por el COLOR de su vehículo: un coche de otro color que pasa a su lado no lo
-     * confunde. Devuelve el carril con mayor fracción de píxeles del color del jugador.
-     */
-    private fun locatePlayerByColor(data: ByteArray, ww: Int, wh: Int, ph: Float, pc: com.farks.autopilot.calibration.LabColor): PlayerObservation {
-        val pb = profile.playerBox
-        val r0 = ((pb.top - cropTop) * ph).toInt().coerceIn(0, wh - 1)
-        val r1 = ((pb.bottom - cropTop) * ph).toInt().coerceIn(r0 + 1, wh)
-        var bestLane: Lane? = null
-        var bestFrac = 0f
-        var second = 0f
-        val tc2 = params.playerTolC * params.playerTolC
-        for (lane in Lane.entries) {
-            val cx = road.laneCenterX(lane, pb.bottom)
-            val half = pb.width * 0.4f
-            val c0 = toPx(cx - half, ww).coerceIn(0, ww - 1)
-            val c1 = toPx(cx + half, ww).coerceIn(c0 + 1, ww)
-            var m = 0
-            var tot = 0
-            for (r in r0 until r1) {
-                for (c in c0 until c1) {
-                    tot++
-                    val o = (r * ww + c) * 3
-                    val dl = kotlin.math.abs((data[o].toInt() and 0xFF) - pc.l)
-                    val da = (data[o + 1].toInt() and 0xFF) - pc.a
-                    val db = (data[o + 2].toInt() and 0xFF) - pc.b
-                    if (dl <= params.playerTolL && da * da + db * db <= tc2) m++
-                }
-            }
-            val f = if (tot > 0) m.toFloat() / tot else 0f
-            if (f > bestFrac) { second = bestFrac; bestFrac = f; bestLane = lane } else if (f > second) second = f
-        }
-        // Debe haber un ganador claro: si dos carriles se parecen (coche del mismo color al lado) no se fía.
-        return if (bestLane != null && bestFrac >= 0.15f && bestFrac >= 1.5f * second) {
-            PlayerObservation(bestLane, (bestFrac * 2f).coerceAtMost(1f))
         } else PlayerObservation(null, 0f)
     }
 

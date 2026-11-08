@@ -21,4 +21,4 @@ kotlinc -jvm-target 17 -cp "$STDLIB:$JUNIT:$OUT/main" -d "$OUT/test" $(find "$RO
 
 CLASSES=$(cd "$OUT/test" && find . -name '*Test.class' | sed 's#^\./##; s#\.class$##; s#/#.#g' | sort | tr '\n' ' ')
 echo "== Ejecutando: $CLASSES =="
-java -cp "$STDLIB:$JUNIT:$OUT/main:$OUT/test" org.junit.runner.JUnitCore $CLASSES
+java -cp "$STDLIB:$JUNIT:$OUT/main:$OUT/test:$ROOT/core/src/test/resources" org.junit.runner.JUnitCore $CLASSES

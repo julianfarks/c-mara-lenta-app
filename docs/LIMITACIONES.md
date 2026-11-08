@@ -39,3 +39,23 @@
 - Hay escenarios físicamente inevitables (dos carriles ocupados al fondo y poco tiempo); no se pueden evitar con ningún algoritmo.
 
 **No verificado**: nada de esto se ha ejecutado en un teléfono ni en un juego real; la extensión del borde, el color del jugador y la resolución adaptativa solo se validaron con imágenes sintéticas (los tests de visión corren en CI). Las latencias reales de su dispositivo pueden diferir; el motor aprende el retardo del gesto, pero no se ha medido.
+
+## Localización del vehículo del jugador (v3)
+
+**Fallo corregido:** al calibrar, «Su vehículo se localiza en: no localizado». Reproducido con la captura real del usuario:
+el color único aprendido (mediana Lab de la parte central de la caja) era (L=140, a=125, b=138), un tono claro del coche que cubre
+solo ≈1 % de la ventana del carril; el algoritmo exigía ≥15 % y un ganador claro, así que nunca localizaba el coche. Un coche
+multicolor (verde, crema, cristal oscuro, luces naranja) no se puede representar con un solo color. Las coordenadas y el
+escalado entre calibración y verificación eran correctos (se comprobó). Además, la caja marcada quedaba corta por abajo (el
+parachoques sobresale ≈24 % de su altura).
+
+**Ahora:** se aprende una *apariencia* (paleta de hasta 8 colores de los píxeles que no son asfalto, área, ancho/alto, centro) y se
+localiza por área + forma + paleta + posición, con continuidad temporal e histéresis. Se analiza una zona ampliada por debajo de la
+caja. Un coche de otro color o de otro tamaño en un carril vecino no se acepta; un coche idéntico al lado es indistinguible por
+apariencia (sin historial se declara ambiguo; con historial se mantiene el carril). El diagnóstico dibuja por carril la ventana,
+lo que no es asfalto y las puntuaciones A/F/C/P, y explica en texto la condición que provocó un rechazo.
+
+**Pruebas:** `PlayerLocatorTest` (JVM, 16 pruebas) y `PlayerLocalizationTest` (OpenCV real, en CI) usan la captura real del usuario
+(limpiada de la superposición con inpainting; `tools/make_player_fixtures.py`) y el sprite real del coche pegado en otros
+carriles/posiciones/escalas/ruido. Límite: son píxeles reales pero composiciones, no una partida en ejecución; si el coche del jugador
+fuese del color del asfalto no se puede distinguir y la calibración lo dice en lugar de inventar un resultado.

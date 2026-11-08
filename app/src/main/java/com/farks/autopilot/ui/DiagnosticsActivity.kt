@@ -100,6 +100,7 @@ class DiagnosticsView(context: Context) : View(context) {
             txt.textSize = 24f
             c.drawText("#${t.id} $ttc${if (t.coasting) " ~" else ""}", t.box.left * sw, t.box.top * sh - 6f, txt)
         }
+        snapshot.detector?.player?.diag?.let { PlayerDiagDraw.draw(c, it, sw, sh) }
         // Línea de colisión y jugador
         stroke.color = Color.CYAN
         val ly = p.collisionY * sh
@@ -171,6 +172,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         sb.append("Estado: ${if (s.running) "en marcha" else "detenido"}  juego al frente: ${s.gameInForeground}\n")
         sb.append("Análisis: %.1f/s  proceso: %.1f ms  fotogramas: %d\n".format(Locale.US, s.analysisFps, s.processingMs, s.framesAnalyzed))
         sb.append("Gestos enviados: ${s.gesturesSent}  fallidos: ${s.gesturesFailed}\n")
+        s.detector?.player?.diag?.let { sb.append("Jugador (visión): ${it.reason}\n") }
         if (o != null) {
             sb.append("Motor: ${o.status}  armado: ${o.armed}\n")
             sb.append("Jugador: ${o.playerLane}${if (o.playerLaneAssumed) " (supuesto)" else ""}  recomendado: ${o.recommendedLane ?: "-"}\n")

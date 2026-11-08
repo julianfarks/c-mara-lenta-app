@@ -21,7 +21,6 @@ import com.farks.autopilot.models.Lane
 import com.farks.autopilot.models.PointN
 import com.farks.autopilot.models.RectN
 import com.farks.autopilot.vision.OpenCvObstacleDetector
-import com.farks.autopilot.vision.PlayerAppearance
 import com.farks.autopilot.vision.RoadColorModel
 import com.farks.autopilot.vision.RoadExtender
 import org.opencv.android.OpenCVLoader
@@ -36,6 +35,9 @@ class CalibrationView(context: Context) : View(context) {
         set(v) { field = v; requestLayout(); invalidate() }
     val points = mutableListOf<PointN>()
     var onChange: (() -> Unit)? = null
+    /** Diagnóstico visual de la verificación del vehículo del jugador (se pinta sobre la captura). */
+    var playerDiag: com.farks.autopilot.models.PlayerDiag? = null
+        set(v) { field = v; invalidate() }
 
     private val paintPt = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.YELLOW; style = Paint.Style.FILL }
     private val paintLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.GREEN; style = Paint.Style.STROKE; strokeWidth = 3f }
@@ -92,6 +94,7 @@ class CalibrationView(context: Context) : View(context) {
             val (x1, y1) = px(PointN(max(a.x, d.x), max(a.y, d.y)))
             c.drawRect(x0, y0, x1, y1, paintBox)
         }
+        playerDiag?.let { PlayerDiagDraw.draw(c, it, width.toFloat(), height.toFloat()) }
     }
 }
 
@@ -132,7 +135,7 @@ class CalibrationActivity : AppCompatActivity() {
         val file = store.referenceFile(pkg)
         refBitmap = if (file.exists()) BitmapFactory.decodeFile(file.path) else null
         view.bitmap = refBitmap
-        view.onChange = { pending = null; saveBtn.isEnabled = false; result.text = ""; updateUi() }
+        view.onChange = { pending = null; view.playerDiag = null; saveBtn.isEnabled = false; result.text = ""; updateUi() }
         col.addView(view)
 
         if (refBitmap == null) {
@@ -187,31 +190,34 @@ class CalibrationActivity : AppCompatActivity() {
         try {
             Utils.bitmapToMat(bmp, mat)
             // 1) Si el borde lejano se marcó por debajo del inicio real de la calzada, se extiende hacia el horizonte
-            //    (mayor alcance de detección). 2) Se aprende el color del vehículo del jugador.
+            //    (mayor alcance de detección). 2) Se aprende la apariencia del vehículo del jugador.
             val ext = RoadExtender.extendFar(mat, base.road)
-            val profile = base.copy(road = ext.road, playerColor = PlayerAppearance.learn(mat, base.playerBox))
-            val grow = RectN(
-                profile.playerBox.left - 0.02f, profile.playerBox.top - 0.02f,
-                profile.playerBox.right + 0.02f, profile.playerBox.bottom + 0.02f,
-            )
-            val model = RoadColorModel.learn(mat, profile.road, listOf(grow))
-            val detector = OpenCvObstacleDetector(profile, model)
+            val profile = base.copy(road = ext.road)
+            // Carretera vacía: se excluye TODA la zona del vehículo (caja ampliada), no solo la caja marcada.
+            val model = RoadColorModel.learn(mat, profile.road, listOf(profile.playerZone))
+            // Apariencia del vehículo: píxeles que no son asfalto (paleta, área, forma, posición), no un color medio.
+            val learned = OpenCvObstacleDetector(profile, model).learnPlayer(mat)
+            val withLook = profile.copy(playerLook = learned.look)
+            val detector = OpenCvObstacleDetector(withLook, model)
             val res = detector.detect(mat)
             val playerOk = res.player.lane == profile.playerLane
+            view.playerDiag = res.player.diag
             val sb = StringBuilder()
             sb.append("Modelo de color aprendido (${RoadColorModel.N_BANDS} franjas).\n")
             if (ext.extended) sb.append("Borde lejano extendido automáticamente de y=%.2f a y=%.2f (más alcance de detección).\n".format(ext.originalFarY, ext.newFarY))
             else sb.append("Borde lejano: sin extensión posible (la calzada no continúa por encima del punto marcado).\n")
-            sb.append("Color de su vehículo: ${if (profile.playerColor != null) "aprendido" else "no disponible"}.\n")
+            sb.append(learned.message).append('\n')
             sb.append("Verificación sobre la propia referencia:\n")
             sb.append(" • Obstáculos detectados: ${res.detections.size} (esperado 0 si la carretera estaba vacía)\n")
             sb.append(" • Su vehículo se localiza en: ${res.player.lane ?: "no localizado"} (marcado: ${profile.playerLane})\n")
+            res.player.diag?.let { sb.append(" • ").append(it.reason).append('\n') }
             sb.append(" • Tiempo de análisis: ${"%.0f".format(res.processingMs)} ms")
+            if (learned.look != null) sb.append("\nEn la imagen: ventanas por carril (verde = aceptado, rojo = rechazado), magenta = lo que no es asfalto; A=área F=forma C=color P=posición.")
             val warn = res.detections.isNotEmpty() || !playerOk
             result.setTextColor(if (warn) Ui.AMBER else Ui.GREEN)
             if (warn) sb.append("\n⚠ Revise los toques o repita la captura con la carretera vacía; puede guardar igualmente y comprobar en Diagnóstico.")
             result.text = sb.toString()
-            pending = StoredProfile(profile, model.toFloatArray())
+            pending = StoredProfile(withLook, model.toFloatArray())
         } catch (e: Exception) {
             pending = null
             result.setTextColor(Ui.RED)

@@ -54,7 +54,30 @@ data class Detection(
 data class LaneDetection(val lane: Lane, val box: RectN, val confidence: Float)
 
 /** Dónde ve la visión al automóvil del jugador (lane == null: no localizado). */
-data class PlayerObservation(val lane: Lane?, val confidence: Float)
+data class PlayerObservation(val lane: Lane?, val confidence: Float, val diag: PlayerDiag? = null)
+
+/** Puntuaciones (0..1) de un carril como candidato a contener al jugador; para el diagnóstico visual. */
+data class LaneScore(
+    val lane: Lane,
+    /** Ventana (normalizada) donde se buscó el vehículo en este carril. */
+    val window: RectN,
+    /** Caja de lo que no es asfalto dentro de la ventana, o null si no había nada. */
+    val fgBox: RectN?,
+    val fgPixels: Int,
+    val area: Float,
+    val shape: Float,
+    val palette: Float,
+    val position: Float,
+    val total: Float,
+)
+
+/** Por qué se aceptó o rechazó cada carril al localizar el vehículo del jugador. */
+data class PlayerDiag(
+    val lanes: List<LaneScore>,
+    val accepted: Lane?,
+    val reason: String,
+    val usedContinuity: Boolean,
+)
 
 /** Todo lo que el motor recibe por cada fotograma analizado. */
 data class FrameObservation(

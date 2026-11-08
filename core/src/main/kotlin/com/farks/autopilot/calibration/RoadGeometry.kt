@@ -98,9 +98,6 @@ data class RoadGeometry(
     }
 }
 
-/** Color en espacio Lab de 8 bits de OpenCV (L, a, b en 0..255). */
-data class LabColor(val l: Float, val a: Float, val b: Float)
-
 /** Perfil de calibración de un videojuego. */
 data class GameProfile(
     val packageName: String,
@@ -109,9 +106,18 @@ data class GameProfile(
     /** Caja del automóvil del jugador en el carril donde se calibró. */
     val playerBox: RectN,
     val playerLane: Lane,
-    /** Color del vehículo del jugador (calibración); permite distinguirlo de otros coches que pasan a su lado. */
-    val playerColor: LabColor? = null,
+    /** Apariencia aprendida del vehículo del jugador (paleta, área, forma, posición); null si no se pudo aprender. */
+    val playerLook: com.farks.autopilot.player.PlayerLook? = null,
 ) {
+    /** Hasta dónde se analiza por debajo de la caja: el coche suele sobresalir (parachoques, ruedas). */
+    val playerZoneBottom: Float get() = maxOf(playerBox.bottom, minOf(0.995f, playerBox.bottom + 0.4f * playerBox.height))
+
+    /** Zona completa del vehículo (caja ampliada); se excluye al aprender el color de la carretera. */
+    val playerZone: RectN get() = RectN(
+        playerBox.left - 0.15f * playerBox.width, playerBox.top - 0.01f,
+        playerBox.right + 0.15f * playerBox.width, playerZoneBottom,
+    )
+
     /** Línea de colisión: el borde superior del automóvil del jugador. */
     val collisionY: Float get() = playerBox.top
 

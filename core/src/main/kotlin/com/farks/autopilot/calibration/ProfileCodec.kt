@@ -1,6 +1,7 @@
 package com.farks.autopilot.calibration
 
 import com.farks.autopilot.models.Lane
+import com.farks.autopilot.player.PlayerLook
 import com.farks.autopilot.models.PointN
 import com.farks.autopilot.models.RectN
 import java.util.Locale
@@ -33,7 +34,7 @@ object ProfileCodec {
                 "${f(r.farLeft.x)},${f(r.farLeft.y)},${f(r.farRight.x)},${f(r.farRight.y)}")
             appendLine("player=${f(p.playerBox.left)},${f(p.playerBox.top)},${f(p.playerBox.right)},${f(p.playerBox.bottom)}")
             appendLine("lane=${p.playerLane.index}")
-            p.playerColor?.let { appendLine("playercolor=${f(it.l)},${f(it.a)},${f(it.b)}") }
+            p.playerLook?.let { look -> appendLine("playerlook=" + look.toFloats().joinToString(",") { f(it) }) }
             appendLine("model=" + s.colorModel.joinToString(",") { f(it) })
         }
     }
@@ -52,10 +53,11 @@ object ProfileCodec {
                     PointN(road[4], road[5]), PointN(road[6], road[7]),
                 )
                 val lane = Lane.fromIndex(kv.getValue("lane").toInt())
-                val pc = kv["playercolor"]?.split(',')?.map { it.toFloat() }
-                if (lane == null || (pc != null && pc.size != 3)) null else StoredProfile(
+                val rawLook = kv["playerlook"]
+                val look = rawLook?.let { PlayerLook.fromFloats(it.split(',').map { v -> v.toFloat() }) }
+                if (lane == null || (rawLook != null && look == null)) null else StoredProfile(
                     GameProfile(unhex(kv.getValue("package")), unhex(kv.getValue("name")), geo,
-                        RectN(pl[0], pl[1], pl[2], pl[3]), lane, pc?.let { LabColor(it[0], it[1], it[2]) }),
+                        RectN(pl[0], pl[1], pl[2], pl[3]), lane, look),
                     model,
                 )
             }

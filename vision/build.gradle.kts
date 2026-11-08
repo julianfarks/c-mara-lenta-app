@@ -16,6 +16,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+// Los fixtures de la captura real del vehículo del jugador viven junto a las pruebas del núcleo.
+sourceSets["test"].resources.srcDir("../core/src/test/resources")
+
 tasks.test {
     useJUnit()
     testLogging {
