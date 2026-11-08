@@ -199,7 +199,8 @@ class OpenCvObstacleDetector(
         val ph = wh / (regionBottom - cropTop)
         val mask = ByteArray(ww * wh)
         val bands = model.bands
-        val nb = if (params.horizonBandFrac > 0f) ((roadTop - cropTop) * ph).toInt().coerceIn(0, wh - 1) else 0
+        // Filas cuyo centro queda por encima del asfalto -> franja de horizonte (el resto usa el modelo de carretera).
+        val nb = if (params.horizonBandFrac > 0f) kotlin.math.ceil((roadTop - cropTop) * ph - 0.5f).toInt().coerceIn(0, wh - 1) else 0
         for (r in nb until wh) {
             val yn = cropTop + (r + 0.5f) / ph
             val e = interpolate(bands, yn)
