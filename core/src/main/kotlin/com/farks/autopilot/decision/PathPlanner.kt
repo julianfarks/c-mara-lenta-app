@@ -59,6 +59,7 @@ class PathPlanner(private val config: EngineConfig) {
          * (edad de la imagen + retardo del gesto). "Mover ya" significa mover en ese instante.
          */
         earliestSec: Float = 0f,
+        allowDefer: Boolean = true,
     ): PlanResult {
         val dt = config.planStepSec
         val n = ceil(config.horizonSec / dt).toInt()
@@ -72,8 +73,9 @@ class PathPlanner(private val config: EngineConfig) {
         // Tablas de penalización y holgura por carril y paso.
         val pen = Array(3) { FloatArray(n + t + 1) }
         val clr = Array(3) { FloatArray(n + t + 1) { CLEAR_CAP } }
-        val margin = config.safetyMarginSec
         for (lane in Lane.entries) {
+            // Carriles a los que se entra: más margen que en el propio (el cambio y la estimación de llegada son inciertos).
+            val margin = config.safetyMarginSec + if (lane == start) 0f else config.entryExtraMarginSec
             val ws = windows[lane].orEmpty()
             for (s in 0..n + t) {
                 val time = (s + 0.5f) * dt
@@ -187,10 +189,26 @@ class PathPlanner(private val config: EngineConfig) {
                 note = if (deadEnd) "sin salida segura: elegir el menor riesgo" else "cambio necesario para evitar obstáculo"
             }
         }
+        // Esperar mientras haya holgura: si un plan igual de seguro que empieza deferSec más tarde sigue siendo viable,
+        // no se compromete el cambio todavía (así el carril destino se elige con más información: un segundo coche
+        // que aún no se ve, uno sin confirmar...). La holgura se vigila en cada fotograma, así que el cambio se
+        // ordena en cuanto esperar más ya no es seguro.
+        if (moveNow != null && allowDefer && !deadEnd && config.deferSec > 0f) {
+            val later = plan(
+                start, windows, sinceLastMoveSec, lastDir, max(blockedForSec, earliestSec + config.deferSec),
+                earliestSec, allowDefer = false,
+            )
+            if (!later.deadEnd && later.penalty <= best.pen + DEFER_TOLERANCE && later.minClearanceSec >= min(best.minClear, DEFER_MIN_CLEAR)) {
+                return later.copy(moveNow = null, baselinePenalty = baseline, note = "esperar: aún hay margen para ver más antes de elegir carril")
+            }
+        }
         return PlanResult(moveNow, finalLane, best.pen, baseline, best.minClear, moves, deadEnd, note)
     }
 
     companion object {
         const val CLEAR_CAP = 1.5f
+        const val DEFER_TOLERANCE = 0.02f
+        /** Holgura mínima (s) que debe conservar el plan aplazado respecto a cualquier obstáculo. */
+        const val DEFER_MIN_CLEAR = 0.2f
     }
 }

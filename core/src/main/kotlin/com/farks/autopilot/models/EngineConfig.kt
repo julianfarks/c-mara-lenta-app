@@ -19,6 +19,10 @@ data class EngineConfig(
     val moveConfirmTimeoutMs: Long = 700,
     /** Duración del cambio de carril (el jugador ocupa ambos carriles mientras dura). */
     val laneChangeSec: Float = 0.20f,
+    /** Si hay holgura, el cambio de carril se pospone hasta que esperar deferSec más deje de ser seguro (0 = actuar al instante). */
+    val deferSec: Float = 0.20f,
+    /** Margen de seguridad adicional (s) en los carriles a los que se entra, frente al carril actual. */
+    val entryExtraMarginSec: Float = 0.12f,
     val safetyMarginSec: Float = 0.12f,
     /** Tiempo que un obstáculo bloquea el carril desde que llega a la línea de colisión. */
     val dwellSec: Float = 0.55f,
@@ -90,7 +94,7 @@ data class EngineConfig(
         fun legacy(base: EngineConfig = EngineConfig()) = base.copy(
             compensateLatency = false, learnLatency = false, adaptiveDwell = false, speedPrior = false,
             uncertaintyK = 0f, safetyMarginSec = 0.18f, transitVeto = false, selfFilter = false, externalChangeMs = 0,
-            confirmExpectedInOneFrame = false, minMoveIntervalMs = 350, fastConfirm = false, scaleDepth = false, adaptWorldSpeed = false,
+            confirmExpectedInOneFrame = false, minMoveIntervalMs = 350, fastConfirm = false, scaleDepth = false, adaptWorldSpeed = false, deferSec = 0f, entryExtraMarginSec = 0f,
         )
     }
 }

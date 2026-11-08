@@ -30,12 +30,14 @@ object LatencyStudy {
         var moves = 0
         var needlessMoves = 0
         var dangerousMoves = 0
+        var dangerousUnseen = 0
+        val dangerNotes = ArrayList<String>()
         var phantomMoves = 0
         val margins = ArrayList<Float>()
         fun summary(name: String): String = String.format(
             Locale.US,
-            "%-34s runs=%d  choques=%d (en %d runs)  movimientos=%d  innecesarios=%d  hacia_carril_peligroso=%d  margen_medio=%.2fs",
-            name, runs, collisions, runsWithCollision, moves, needlessMoves, dangerousMoves,
+            "%-34s runs=%d  choques=%d (en %d runs)  movimientos=%d  innecesarios=%d  hacia_carril_peligroso=%d (sin verlo: %d)  margen_medio=%.2fs",
+            name, runs, collisions, runsWithCollision, moves, needlessMoves, dangerousMoves, dangerousUnseen,
             if (margins.isEmpty()) Float.NaN else margins.average().toFloat(),
         )
     }
@@ -84,8 +86,9 @@ object LatencyStudy {
             )
             val engine = AutopilotEngine(TestGeo.profile, config)
             val laneAtCmd = HashMap<Long, Pair<Lane, Float>>()
+            val seenAtCmd = HashMap<Long, Int>()
             val res = runClosedLoop(world, engine, 15f, hook = { _, out ->
-                out.command?.let { laneAtCmd[it.id] = it.from to world.timeSec }
+                out.command?.let { laneAtCmd[it.id] = it.from to world.timeSec; seenAtCmd[it.id] = out.lanes.getValue(it.target).obstacleCount }
             })
             res.outputs.last().reactions.forEach { r -> r.marginAtChangeSec?.let { m.margins += it } }
             m.runs++
@@ -103,7 +106,12 @@ object LatencyStudy {
                     if (phantomsPerRun > 0) m.phantomMoves++
                 }
                 val danger = arrivals[c.target].orEmpty().any { it in (tCmd + l - 0.15f)..(tCmd + l + tt + 0.35f) }
-                if (danger) m.dangerousMoves++
+                if (danger) {
+                    m.dangerousMoves++
+                    val seen = seenAtCmd.getValue(c.id)
+                    if (seen == 0) m.dangerousUnseen++
+                    m.dangerNotes += "seed=$seed t=%.2f %s->%s vistos_en_destino=%d llegadas_destino=%s origen=%s".format(Locale.US, tCmd, from, c.target, seen, arrivals[c.target]?.map { "%.2f".format(Locale.US, it) }, arrivals[from]?.map { "%.2f".format(Locale.US, it) })
+                }
             }
         }
         return m

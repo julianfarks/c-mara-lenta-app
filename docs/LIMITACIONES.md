@@ -74,3 +74,16 @@ medido en el video) anclada al contacto; (3) la velocidad habitual del juego se 
 Resultado sobre ese video (detecciones del espejo Python del detector + motor Kotlin): orden a t=4.44 s, 0.93 s antes del choque, una sola orden, a un carril libre.
 Límites: es UN obstáculo de UNA grabación; la constante de ancho en el contacto (0.7 del ancho del jugador) se midió en ese video; las detecciones salen del
 espejo Python (la versión Kotlin se prueba en CI con fotogramas reales); el fondo temporal absorbe un objeto presente al iniciar el piloto.
+
+## v5 — elección de carril con dos coches
+
+- **Problema observado:** con un coche en el carril propio y otro en un lateral, el piloto a veces se iba al carril equivocado.
+  Causa reproducida en simulación de ciclo cerrado: ordenaba el cambio en el mismo fotograma en que confirmaba el primer coche,
+  cuando el segundo aún no era visible (aparecía 0,03–0,3 s después), aunque había holgura para esperar.
+- **Cambio:** el planificador aplaza el cambio (`deferSec`=0,2 s) mientras un plan igual de seguro que empiece más tarde siga
+  siendo viable, y usa un margen extra (`entryExtraMarginSec`=0,12 s) en los carriles a los que se entra.
+- **Resultado en simulación (150 escenarios, latencias típicas):** choques 22 → 15; prueba `TwoCarsTest` (centro + lateral, el otro
+  lateral libre, 2,0–3,2 u/s): siempre va al carril libre y sin choque.
+- **Límite que no se puede resolver:** si el segundo coche aparece DESPUÉS de que ya hay que decidir (velocidades altas,
+  coche que surge casi a la vez), el motor no puede conocerlo; elegir bien ahí es cuestión de suerte. Lo que ayuda es verlos antes
+  (franja de horizonte). No se ha probado en un teléfono real.

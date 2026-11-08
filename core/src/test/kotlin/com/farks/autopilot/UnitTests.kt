@@ -123,7 +123,7 @@ class TrackerTest {
 }
 
 class PlannerTest {
-    private val cfg = EngineConfig()
+    private val cfg = EngineConfig(deferSec = 0f)
     private val planner = PathPlanner(cfg)
 
     private fun win(arrive: Float) = listOf(ObstacleWindow(1, arrive, arrive + cfg.dwellSec, 1f))
