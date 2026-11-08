@@ -66,16 +66,41 @@ class ObstacleTracker(
 
     private val collisionDepth: Float get() = geo.depthProxy(profile.collisionY)
 
+    /** Ancho (normalizado) que tiene un obstáculo cuando toca al jugador. */
+    private val contactWidth: Float = run {
+        val sprite = profile.playerLook?.let { it.widthRel * profile.playerBox.width } ?: profile.playerBox.width
+        (config.collisionWidthRatio * sprite).coerceAtLeast(0.02f)
+    }
+
+    /** depth = c/ancho, anclado para que coincida con la profundidad geométrica en el contacto. */
+    private val scaleC: Float get() = collisionDepth * contactWidth
+
+    /** ¿Sirve el ancho de esta detección como medida de distancia? (ni minúsculo, ni ya recortado por la zona del jugador) */
+    private fun scaleUsable(b: RectN): Boolean =
+        config.scaleDepth && b.width >= 0.02f && b.width <= 1.15f * contactWidth
+
+    /** Profundidad medida de una detección: por escala si es fiable; si no, por posición vertical. */
+    fun measuredDepth(b: RectN): Float = if (scaleUsable(b)) scaleC / b.width else geo.depthProxy(b.bottom)
+
     /** Velocidad usada cuando todavía no hay medición: cruzar la carretera en fallbackCrossSec. */
     fun fallbackSpeed(): Float {
-        val span = geo.depthProxy(geo.farY) - collisionDepth
+        val far = if (config.scaleDepth) scaleC / 0.05f else geo.depthProxy(geo.farY)
+        val span = far - collisionDepth
         return (span / config.fallbackCrossSec).coerceAtLeast(0.05f)
     }
 
     fun speedOf(t: Track): Float = t.speed ?: priorSpeed()
 
     /** Velocidad habitual del juego (medida en otros obstáculos) o, si no hay, la supuesta. */
-    fun priorSpeed(): Float = worldSpeed ?: fallbackSpeed()
+    fun priorSpeed(): Float {
+        val w = worldSpeed ?: return fallbackSpeed()
+        if (!config.adaptWorldSpeed) return w
+        val age = ((lastTickNs - worldSpeedNs) / 1e9f).coerceIn(0f, 5f)
+        return w * (1f + worldTrend * age).coerceIn(0.8f, 1.6f)
+    }
+    private var worldSpeedNs = 0L
+    private var lastTickNs = 0L
+    private var worldTrend = 0f   // cambio relativo por segundo (el juego acelera)
 
     /** Incertidumbre relativa de la velocidad de un obstáculo (σ/velocidad). */
     private fun priorSigma(): Float = priorSpeed() * (if (worldSpeed != null) 0.25f else 0.6f)
@@ -113,11 +138,14 @@ class ObstacleTracker(
 
     fun predictedBottom(t: Track, nowNs: Long): Float = geo.yFromDepth(depthNow(t, nowNs))
 
+    private val passedDepth: Float get() = geo.depthProxy(profile.playerBox.bottom + 0.10f)
+
     /** Segundos hasta que el borde cercano del obstáculo alcanza la línea de colisión (<=0: ya llegó). */
     fun ttcSec(t: Track, nowNs: Long): Float =
         (depthNow(t, nowNs) - collisionDepth) / speedOf(t)
 
     fun update(tNs: Long, detections: List<LaneDetection>) {
+        lastTickNs = tNs
         val maxCoastNs = config.maxCoastMs * 1_000_000L
 
         for (lane in Lane.entries) {
@@ -130,6 +158,18 @@ class ObstacleTracker(
 
             val pairs = ArrayList<Pair>()
             for ((ti, t) in laneTracks.withIndex()) {
+                if (config.scaleDepth) {
+                    // Asociación en el espacio de profundidad (escala): tolerancia relativa a la distancia.
+                    val predD = depthNow(t, tNs)
+                    for ((di, d) in laneDets.withIndex()) {
+                        val md = measuredDepth(d.box)
+                        val rel = abs(md - predD) / max(predD, 1f)
+                        if (rel > 0.45f) continue
+                        val dx = abs(d.box.centerX - t.box.centerX) / geo.laneWidth(d.box.bottom.coerceAtLeast(geo.farY)).coerceAtLeast(0.01f)
+                        pairs += Pair(ti, di, rel + 0.25f * dx)
+                    }
+                    continue
+                }
                 val pred = predictedBottom(t, tNs)
                 val expectedStep = abs(pred - t.box.bottom)
                 val gate = maxOf(0.08f, 0.05f + 1.5f * expectedStep)
@@ -155,7 +195,7 @@ class ObstacleTracker(
             }
             for ((di, d) in laneDets.withIndex()) {
                 if (!usedDet[di]) {
-                    val t = Track(nextId++, lane, tNs, d.box, geo.depthProxy(d.box.bottom))
+                    val t = Track(nextId++, lane, tNs, d.box, measuredDepth(d.box))
                     t.samples.addLast(doubleArrayOf(0.0, t.lastDepth.toDouble()))
                     if (config.confirmFrames <= 1) t.confirmedNs = tNs
                     list += t
@@ -167,16 +207,16 @@ class ObstacleTracker(
         val passedY = profile.playerBox.bottom + 0.10f
         list.removeAll { t ->
             val lost = tNs - t.lastSeenNs > maxCoastNs
-            val passed = predictedBottom(t, tNs) > passedY
+            val passed = if (config.scaleDepth) depthNow(t, tNs) < passedDepth else predictedBottom(t, tNs) > passedY
             lost || passed
         }
-        updateWorldSpeed()
+        updateWorldSpeed(tNs)
     }
 
     private fun applyMatch(t: Track, d: LaneDetection, tNs: Long) {
         // Una detección que toca la zona del jugador está recortada por abajo: su borde inferior ya no
         // indica la profundidad real. Se mantiene vivo el seguimiento extrapolando y no se mide con ella.
-        val atZone = config.speedPrior && d.box.bottom >= profile.collisionY - 0.008f
+        val atZone = config.speedPrior && (d.box.bottom >= profile.collisionY - 0.008f || (config.scaleDepth && !scaleUsable(d.box)))
         val extrapolated = depthNow(t, tNs)
         t.box = d.box
         t.hits++
@@ -188,7 +228,7 @@ class ObstacleTracker(
             t.lastDepth = extrapolated
             return
         }
-        t.lastDepth = geo.depthProxy(d.box.bottom)
+        t.lastDepth = measuredDepth(d.box)
         val ts = (tNs - t.firstSeenNs) / 1e9
         t.samples.addLast(doubleArrayOf(ts, t.lastDepth.toDouble()))
         while (t.samples.size > 12 || (t.samples.size > 2 && ts - t.samples.first()[0] > 0.6)) {
@@ -235,7 +275,7 @@ class ObstacleTracker(
         val fit = (-(cov / varT)).toFloat()
         // Ruido de la profundidad: du = u² · dy
         val u = md.toFloat()
-        val sigmaU = (config.depthNoise * u * u).toDouble()
+        val sigmaU = if (config.scaleDepth) (config.scaleWidthNoise / contactWidth * u * u).toDouble() else (config.depthNoise * u * u).toDouble()
         val varFit = (sigmaU * sigmaU / varT).coerceAtLeast(1e-6)
         val prior = priorSpeed()
         val sp = priorSigma().toDouble()
@@ -271,11 +311,19 @@ class ObstacleTracker(
         }
     }
 
-    private fun updateWorldSpeed() {
+    private fun updateWorldSpeed(nowNs: Long) {
         val speeds = list.filter { it.hits >= 5 && it.speed != null }.map { it.speed!! }.sorted()
         if (speeds.isEmpty()) return
         val median = speeds[speeds.size / 2]
         val prev = worldSpeed
-        worldSpeed = if (prev == null) median else 0.7f * prev + 0.3f * median
+        if (prev == null) { worldSpeed = median; worldSpeedNs = nowNs; return }
+        val dt = ((nowNs - worldSpeedNs) / 1e9f).coerceIn(0.001f, 2f)
+        if (config.adaptWorldSpeed) {
+            // El juego acelera: se sigue la tendencia relativa (suavizada) y la media reacciona rápido a lo reciente.
+            val rel = (median - prev) / prev / dt
+            worldTrend = (0.9f * worldTrend + 0.1f * rel).coerceIn(-0.1f, 0.3f)
+            worldSpeed = 0.5f * prev + 0.5f * median
+        } else worldSpeed = 0.7f * prev + 0.3f * median
+        worldSpeedNs = nowNs
     }
 }

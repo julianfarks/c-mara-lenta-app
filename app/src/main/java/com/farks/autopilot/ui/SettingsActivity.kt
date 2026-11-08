@@ -51,6 +51,13 @@ class SettingsActivity : AppCompatActivity() {
         col.addView(overlay)
         saves += { s.showOverlay = overlay.isChecked }
 
+        val scale = CheckBox(this).apply {
+            text = "Distancia por tamaño del coche (recomendado en carreteras curvas; desactivar si el juego tiene perspectiva recta)"
+            setTextColor(Ui.TEXT); isChecked = s.scaleDepth
+        }
+        col.addView(scale)
+        saves += { s.scaleDepth = scale.isChecked }
+
         col.addView(Ui.button(this, "Guardar", Ui.GREEN) {
             saves.forEach { it() }
             finish()

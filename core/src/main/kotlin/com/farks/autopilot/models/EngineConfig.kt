@@ -70,13 +70,27 @@ data class EngineConfig(
     /** Rango de velocidad aceptado para la confirmación rápida, relativo a la velocidad habitual del juego. */
     val fastConfirmMinRel: Float = 0.5f,
     val fastConfirmMaxRel: Float = 2.5f,
+
+    // ---- Profundidad por escala del coche (juegos con carretera curva / perspectiva no lineal) -------------
+    /**
+     * Mide la distancia con el ANCHO aparente del coche (1/ancho crece linealmente con el tiempo a velocidad constante,
+     * comprobado en una grabación real de Lane Rush) en vez de con la posición vertical, que en carreteras curvas
+     * o con horizonte tapado no es lineal y subestima la velocidad de aproximación de los coches lejanos.
+     */
+    val scaleDepth: Boolean = false,
+    /** Ancho del coche del obstáculo en el momento de contacto, relativo al ancho del vehículo del jugador. */
+    val collisionWidthRatio: Float = 0.7f,
+    /** Ruido típico del ancho medido (normalizado a la anchura de pantalla). */
+    val scaleWidthNoise: Float = 0.003f,
+    /** El juego acelera con el tiempo: la velocidad habitual se actualiza con los obstáculos recientes y se extrapola su tendencia. */
+    val adaptWorldSpeed: Boolean = true,
 ) {
     companion object {
         /** Comportamiento anterior a la optimización de reacción (para comparar en pruebas). */
         fun legacy(base: EngineConfig = EngineConfig()) = base.copy(
             compensateLatency = false, learnLatency = false, adaptiveDwell = false, speedPrior = false,
             uncertaintyK = 0f, safetyMarginSec = 0.18f, transitVeto = false, selfFilter = false, externalChangeMs = 0,
-            confirmExpectedInOneFrame = false, minMoveIntervalMs = 350, fastConfirm = false,
+            confirmExpectedInOneFrame = false, minMoveIntervalMs = 350, fastConfirm = false, scaleDepth = false, adaptWorldSpeed = false,
         )
     }
 }

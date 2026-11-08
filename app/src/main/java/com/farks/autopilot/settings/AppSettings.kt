@@ -40,7 +40,13 @@ class AppSettings(context: Context) {
         get() = sp.getBoolean("overlay", true)
         set(v) = sp.edit().putBoolean("overlay", v).apply()
 
+    /** Distancia por escala del coche (carreteras curvas / coches que asoman sobre el horizonte). Activada por defecto. */
+    var scaleDepth: Boolean
+        get() = sp.getBoolean("scaleDepth", true)
+        set(v) = sp.edit().putBoolean("scaleDepth", v).apply()
+
     fun engineConfig() = EngineConfig(
+        scaleDepth = scaleDepth,
         minMoveIntervalMs = minMoveIntervalMs.toLong(),
         safetyMarginSec = safetyMarginSec,
         laneChangeSec = laneChangeSec,

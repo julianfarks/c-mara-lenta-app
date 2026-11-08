@@ -85,4 +85,15 @@ class ReactionTest {
         }
         assertTrue(any)
     }
+
+    @Test
+    fun keepsAvoidingWhileTheGameAccelerates() {
+        // El juego va cada vez más rápido: obstáculos sucesivos en el carril del jugador con velocidad creciente.
+        val speeds = listOf(1.8f, 2.0f, 2.3f, 2.7f, 3.1f, 3.5f)
+        val obs = speeds.mapIndexed { i, v -> SimObstacle(Lane.CENTER, 0.4f + i * 2.6f, v) }
+        val k = LatencyStudy.Conditions(visibleFromY = 0.30f)
+        val r = runClosedLoop(world(obs, k), newEngine(base), 18f)
+        println("aceleración: choques=${r.world.collisions} movimientos=${r.commands.size}")
+        assertEquals("choques mientras el juego acelera", 0, r.world.collisions)
+    }
 }

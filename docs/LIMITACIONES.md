@@ -59,3 +59,18 @@ lo que no es asfalto y las puntuaciones A/F/C/P, y explica en texto la condició
 (limpiada de la superposición con inpainting; `tools/make_player_fixtures.py`) y el sprite real del coche pegado en otros
 carriles/posiciones/escalas/ruido. Límite: son píxeles reales pero composiciones, no una partida en ejecución; si el coche del jugador
 fuese del color del asfalto no se puede distinguir y la calibración lo dice en lugar de inventar un resultado.
+
+## Reacción tardía en partida real (v4) — análisis de la grabación del usuario
+
+Con un video real de Lane Rush se midió: el coche naranja se ve sobre la línea del horizonte desde t≈4.4 s y golpea al jugador a t≈5.37 s
+(≈1 s de margen). Antes de este cambio: el detector solo miraba por debajo del horizonte (el coche asoma por encima, sobre las colinas),
+lo veía a ≈5.0 s y la orden salía a 0.30 s del choque (gesto ≈0.1 s + cambio ≈0.25 s: imposible). Además la distancia se calculaba con la
+posición vertical y un horizonte extrapolado de líneas rectas (y≈0.38 frente al real y≈0.63): en esta carretera curva eso subestima la velocidad
+de aproximación de los coches lejanos y el tiempo hasta el choque sale demasiado largo.
+
+Cambios: (1) franja de horizonte con fondo temporal por píxel sobre el borde lejano; (2) distancia por escala del coche (1/ancho es lineal en el tiempo,
+medido en el video) anclada al contacto; (3) la velocidad habitual del juego se actualiza con los obstáculos recientes y se extrapola su tendencia (el juego acelera).
+
+Resultado sobre ese video (detecciones del espejo Python del detector + motor Kotlin): orden a t=4.44 s, 0.93 s antes del choque, una sola orden, a un carril libre.
+Límites: es UN obstáculo de UNA grabación; la constante de ancho en el contacto (0.7 del ancho del jugador) se midió en ese video; las detecciones salen del
+espejo Python (la versión Kotlin se prueba en CI con fotogramas reales); el fondo temporal absorbe un objeto presente al iniciar el piloto.

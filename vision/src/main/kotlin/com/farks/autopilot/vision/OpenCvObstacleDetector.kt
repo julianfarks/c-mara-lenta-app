@@ -37,6 +37,19 @@ data class DetectorParams(
     val minWidthLane: Float = 0.30f,
     val minHeightLane: Float = 0.15f,
     val minFill: Float = 0.35f,
+    /**
+     * Franja sobre el borde lejano de la carretera (fracción de la altura de pantalla) donde se buscan coches que acaban de
+     * aparecer: en muchos juegos el coche asoma sobre la línea del horizonte, por encima del asfalto, y sin esta franja
+     * solo se ve cuando ya está cerca. Ahí no hay modelo de asfalto sino un fondo temporal por píxel. 0 = desactivada.
+     */
+    val horizonBandFrac: Float = 0.05f,
+    /** Cerca del horizonte (fracción de altura bajo el borde lejano) los umbrales de tamaño se relajan: apenas asoma. */
+    val farZoneFrac: Float = 0.035f,
+    val farMinWidthLane: Float = 0.22f,
+    val farMinHeightLane: Float = 0.07f,
+    /** Diferencia (L*0.8 o crominancia*1.6, escala Lab 8 bits) respecto al fondo para considerar un píxel nuevo. */
+    val bgDiff: Float = 22f,
+    val bgAlpha: Float = 0.04f,
     /** Fracción de píxeles distintos al asfalto en la caja del jugador para dar por localizado el carril. */
     val playerMinForeground: Float = 0.20f,
     val classifierReject: Float = 0.40f,
@@ -67,7 +80,13 @@ class OpenCvObstacleDetector(
     private val params: DetectorParams = DetectorParams(),
 ) {
     private val road = profile.road
-    private val cropTop = road.farY + 0.002f
+    /** Primera fila con asfalto (el modelo de color solo vale desde aquí). */
+    private val roadTop = road.farY + 0.002f
+    private val cropTop = if (params.horizonBandFrac > 0f) (road.farY - params.horizonBandFrac).coerceAtLeast(0.01f) else roadTop
+
+    // Fondo temporal de la franja del horizonte (Lab de 8 bits por píxel) y edad de cada píxel como primer plano.
+    private var bg: FloatArray? = null
+    private var fgAge: IntArray? = null
     private val obstBottom = profile.playerBox.top - 0.004f
     /** Se analiza hasta por debajo de la caja: el coche suele sobresalir (parachoques, ruedas). */
     private val regionBottom = profile.playerZoneBottom
@@ -84,7 +103,7 @@ class OpenCvObstacleDetector(
 
     /** Ancho de trabajo: más resolución cuanto más estrecho se ve el carril al fondo (mejor alcance y mejor TTC). */
     private val workW: Int = if (params.workWidth > 0) params.workWidth else {
-        val farFrac = (road.laneWidth(cropTop) / (x1n - x0n)).coerceAtLeast(0.02f)
+        val farFrac = (road.laneWidth(roadTop) / (x1n - x0n)).coerceAtLeast(0.02f)
         (((params.farLanePx / farFrac).toInt().coerceIn(160, 320) + 7) / 8) * 8
     }
 
@@ -94,6 +113,58 @@ class OpenCvObstacleDetector(
         }
         require(x1n > x0n + 0.1f) { "Zona de carretera inválida: recalibre." }
     }
+
+    /**
+     * Franja sobre el horizonte: primer plano = píxeles que difieren del fondo temporal. El fondo se actualiza despacio
+     * y solo donde no hay primer plano (un coche que crece no se absorbe); si casi toda la franja cambia (cambio de
+     * escena) se reinicia, y un píxel que lleva mucho tiempo distinto se absorbe (objeto estático/decoración nueva).
+     */
+    private fun bandMask(data: ByteArray, mask: ByteArray, ww: Int, nb: Int) {
+        val n = ww * nb
+        var b = bg
+        var age = fgAge
+        if (b == null || b.size != n * 3 || age == null || age.size != n) {
+            b = FloatArray(n * 3) { (data[it].toInt() and 0xFF).toFloat() }
+            age = IntArray(n)
+            bg = b; fgAge = age
+        }
+        val fg = BooleanArray(n)
+        var count = 0
+        for (i in 0 until n) {
+            val o = i * 3
+            val dl = kotlin.math.abs((data[o].toInt() and 0xFF) - b[o]) * 0.8f
+            val da = (data[o + 1].toInt() and 0xFF) - b[o + 1]
+            val db = (data[o + 2].toInt() and 0xFF) - b[o + 2]
+            val dc = kotlin.math.sqrt(da * da + db * db) * 1.6f
+            if (max(dl, dc) > params.bgDiff) { fg[i] = true; count++ }
+        }
+        if (count > 0.35f * n) { // cambio de escena
+            for (i in 0 until n * 3) b[i] = (data[i].toInt() and 0xFF).toFloat()
+            java.util.Arrays.fill(age, 0)
+            return
+        }
+        for (i in 0 until n) if (fg[i]) { mask[i] = -1; age[i]++ } else age[i] = 0
+        // Actualización lenta excluyendo el primer plano y su entorno (dilatación 5×5).
+        for (r in 0 until nb) for (c in 0 until ww) {
+            val i = r * ww + c
+            var near = false
+            var rr = max(0, r - 2)
+            while (rr <= min(nb - 1, r + 2) && !near) {
+                var cc = max(0, c - 2)
+                while (cc <= min(ww - 1, c + 2)) { if (fg[rr * ww + cc]) { near = true; break }; cc++ }
+                rr++
+            }
+            if (!near || age[i] > 45) {
+                val o = i * 3
+                val a = params.bgAlpha
+                for (k in 0 until 3) b[o + k] = b[o + k] * (1f - a) + (data[o + k].toInt() and 0xFF) * a
+                if (age[i] > 45) age[i] = 0
+            }
+        }
+    }
+
+    /** Olvida el fondo del horizonte (p. ej. al cambiar de partida). */
+    fun resetBackground() { bg = null; fgAge = null }
 
     private class Prepared(val data: ByteArray, val mask: ByteArray, val ww: Int, val wh: Int, val ph: Float)
 
@@ -128,7 +199,8 @@ class OpenCvObstacleDetector(
         val ph = wh / (regionBottom - cropTop)
         val mask = ByteArray(ww * wh)
         val bands = model.bands
-        for (r in 0 until wh) {
+        val nb = if (params.horizonBandFrac > 0f) ((roadTop - cropTop) * ph).toInt().coerceIn(0, wh - 1) else 0
+        for (r in nb until wh) {
             val yn = cropTop + (r + 0.5f) / ph
             val e = interpolate(bands, yn)
             val base = r * ww
@@ -140,6 +212,7 @@ class OpenCvObstacleDetector(
                 if (dl > e[3] || da * da + db * db > e[4] * e[4]) mask[base + c] = -1 // 255
             }
         }
+        if (nb > 0) bandMask(data, mask, ww, nb)
         return Prepared(data, mask, ww, wh, ph)
     }
 
@@ -175,13 +248,15 @@ class OpenCvObstacleDetector(
             val valid = Mat.zeros(obstRows, ww, CvType.CV_8UC1)
             val pts = ArrayList<Point>(4)
             for (yn in floatArrayOf(cropTop, obstBottom)) {
-                val w = road.laneWidth(yn)
-                val xl = road.leftX(yn) + w * lane.index + params.laneShrink * w
+                val ye = max(yn, road.farY) // sobre el horizonte los carriles se prolongan verticales
+                val w = road.laneWidth(ye)
+                val xl = road.leftX(ye) + w * lane.index + params.laneShrink * w
                 pts += Point(toPx(xl, ww).toDouble(), ((yn - cropTop) * ph).toDouble())
             }
             for (yn in floatArrayOf(obstBottom, cropTop)) {
-                val w = road.laneWidth(yn)
-                val xr = road.leftX(yn) + w * (lane.index + 1) - params.laneShrink * w
+                val ye = max(yn, road.farY)
+                val w = road.laneWidth(ye)
+                val xr = road.leftX(ye) + w * (lane.index + 1) - params.laneShrink * w
                 pts += Point(toPx(xr, ww).toDouble(), ((yn - cropTop) * ph).toDouble())
             }
             val poly = MatOfPoint()
@@ -208,8 +283,11 @@ class OpenCvObstacleDetector(
                 val xr = x0n + (x + w).toFloat() / ww * (x1n - x0n)
                 val yt = cropTop + y / ph
                 val yb = cropTop + (y + h) / ph
-                val lw = road.laneWidth(yb)
-                if ((xr - xl) < params.minWidthLane * lw || (yb - yt) < params.minHeightLane * lw) continue
+                val lw = road.laneWidth(max(yb, road.farY))
+                val far = yb < road.farY + params.farZoneFrac
+                val mw = if (far) params.farMinWidthLane else params.minWidthLane
+                val mh = if (far) params.farMinHeightLane else params.minHeightLane
+                if ((xr - xl) < mw * lw || (yb - yt) < mh * lw) continue
                 val fill = area.toFloat() / (w * h)
                 if (fill < params.minFill) continue
                 val box = RectN(xl, yt, xr, yb)
