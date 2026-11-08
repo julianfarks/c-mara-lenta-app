@@ -100,7 +100,8 @@ class DetectorSyntheticTest {
             Imgproc.rectangle(img, Point((x0 + (x1 - x0) / 6).toDouble(), (y0 + (y1 - y0) / 6).toDouble()),
                 Point((x1 - (x1 - x0) / 6).toDouble(), (y0 + (y1 - y0) / 2).toDouble()), Scalar(30.0, 30.0, 30.0), -1)
             Imgproc.rectangle(img, Point(x0.toDouble(), (y1 - (y1 - y0) / 8).toDouble()), Point(x1.toDouble(), y1.toDouble()), Scalar(20.0, 20.0, 20.0), -1)
-            truth[car.lane] = RectN(x0.toFloat() / W, max(y0.toFloat() / H, road.farY + 0.002f), x1.toFloat() / W, y1.toFloat() / H)
+            // El detector también mira la franja sobre el borde lejano (franja de horizonte): la caja real llega hasta allí.
+            truth[car.lane] = RectN(x0.toFloat() / W, max(y0.toFloat() / H, road.farY - DetectorParams().horizonBandFrac), x1.toFloat() / W, y1.toFloat() / H)
         }
         if (withPlayer) {
             val pw = playerBox.width
