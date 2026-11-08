@@ -248,13 +248,13 @@ class OpenCvObstacleDetector(
         for (lane in Lane.entries) {
             val valid = Mat.zeros(obstRows, ww, CvType.CV_8UC1)
             val pts = ArrayList<Point>(4)
-            for (yn in floatArrayOf(cropTop, obstBottom)) {
+            for (yn in floatArrayOf(cropTop, road.farY, obstBottom)) {
                 val ye = max(yn, road.farY) // sobre el horizonte los carriles se prolongan verticales
                 val w = road.laneWidth(ye)
                 val xl = road.leftX(ye) + w * lane.index + params.laneShrink * w
                 pts += Point(toPx(xl, ww).toDouble(), ((yn - cropTop) * ph).toDouble())
             }
-            for (yn in floatArrayOf(obstBottom, cropTop)) {
+            for (yn in floatArrayOf(obstBottom, road.farY, cropTop)) {
                 val ye = max(yn, road.farY)
                 val w = road.laneWidth(ye)
                 val xr = road.leftX(ye) + w * (lane.index + 1) - params.laneShrink * w

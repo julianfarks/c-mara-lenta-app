@@ -98,11 +98,11 @@ class Detector:
         for lane in range(3):
             valid = np.zeros_like(mask)
             pts = []
-            for y in (self.top, self.bot):
+            for y in (self.top, FAR_Y, self.bot):
                 yy = max(y, FAR_Y)           # sobre el horizonte los carriles son verticales
                 w_ = lw(yy); xl = lx(yy) + w_ * lane + .12 * w_
                 pts.append(((xl - self.x0) / (self.x1 - self.x0) * self.ww, (y - self.top) * ph))
-            for y in (self.bot, self.top):
+            for y in (self.bot, FAR_Y, self.top):
                 yy = max(y, FAR_Y); w_ = lw(yy); xr = lx(yy) + w_ * (lane + 1) - .12 * w_
                 pts.append(((xr - self.x0) / (self.x1 - self.x0) * self.ww, (y - self.top) * ph))
             cv2.fillConvexPoly(valid, np.array(pts, np.int32), 255)
