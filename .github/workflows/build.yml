@@ -1,0 +1,63 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 1) Núcleo: tracking, predicción, planificador, motor, escenarios A-J (JVM puro)
+      - name: Pruebas del núcleo (escenarios A-J)
+        run: ./gradlew :core:test --no-daemon
+
+      # 2) Visión: detector OpenCV sobre escenas sintéticas (usa el jar nativo org.openpnp:opencv)
+      - name: Pruebas del detector
+        run: ./gradlew :vision:test --no-daemon
+
+      # 3) APK instalable (firmado con la clave de depuración salvo que haya keystore en secretos)
+      - name: Compilar APK
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Informes de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            core/build/reports/tests
+            vision/build/reports/tests
+
+      - name: APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FarKsAutoPilot-apk
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Publicar en Releases (solo en main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: FarKs AutoPilot (última compilación)
+          prerelease: true
+          body: |
+            APK compilado automáticamente tras pasar las pruebas del núcleo y del detector.
+            **Experimental**: la detección solo se ha probado con imágenes sintéticas; calibre cada juego y verifique en Diagnóstico.
+          files: app/build/outputs/apk/release/*.apk
