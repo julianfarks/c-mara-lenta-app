@@ -7,7 +7,7 @@ import com.farks.autopilot.models.PlayerObservation
 
 sealed class PlayerEvent {
     /** La visión confirmó que el jugador llegó al carril ordenado. */
-    data class MoveConfirmed(val cmd: MoveCommand) : PlayerEvent()
+    data class MoveConfirmed(val cmd: MoveCommand, val firstSeenNs: Long? = null) : PlayerEvent()
 
     /** Pasó el tiempo y el jugador sigue en el carril de origen: el gesto no tuvo efecto. */
     data class MoveFailed(val cmd: MoveCommand) : PlayerEvent()
@@ -38,6 +38,7 @@ class PlayerLaneTracker(initial: Lane, private val config: EngineConfig) {
 
     private var candidate: Lane? = null
     private var candidateCount = 0
+    private var candidateSinceNs: Long? = null
 
     fun reset(initial: Lane) {
         lane = initial
@@ -53,6 +54,7 @@ class PlayerLaneTracker(initial: Lane, private val config: EngineConfig) {
         sawObservationSincePending = false
         candidate = null
         candidateCount = 0
+        candidateSinceNs = null
     }
 
     /** Se cancela el seguimiento del movimiento pendiente (p. ej. el sistema canceló el gesto). */
@@ -60,7 +62,7 @@ class PlayerLaneTracker(initial: Lane, private val config: EngineConfig) {
         pending = null
     }
 
-    fun onObservation(obs: PlayerObservation?): PlayerEvent? {
+    fun onObservation(obs: PlayerObservation?, tNs: Long? = null): PlayerEvent? {
         val seen = obs?.lane
         if (obs == null || seen == null || obs.confidence < 0.5f) return null
         sawObservationSincePending = true
@@ -74,18 +76,29 @@ class PlayerLaneTracker(initial: Lane, private val config: EngineConfig) {
         if (seen == candidate) candidateCount++ else {
             candidate = seen
             candidateCount = 1
+            candidateSinceNs = tNs
         }
-        if (candidateCount < config.playerConfirmFrames) return null
+        val needed = if (pending?.target == seen && config.confirmExpectedInOneFrame && obs.confidence >= 0.7f) 1
+        else config.playerConfirmFrames
+        if (candidateCount < needed) return null
+        // Un cambio que no se ordenó (p. ej. un coche que pasa junto al jugador) debe persistir un tiempo.
+        val expected = pending?.target
+        val since = candidateSinceNs
+        if (seen != expected && tNs != null && since != null &&
+            tNs - since < config.externalChangeMs * 1_000_000L
+        ) return null
 
         val previous = lane
         lane = seen
         assumed = false
+        val firstSeen = candidateSinceNs
         candidate = null
         candidateCount = 0
+        candidateSinceNs = null
         val p = pending
         return if (p != null && seen == p.target) {
             pending = null
-            PlayerEvent.MoveConfirmed(p)
+            PlayerEvent.MoveConfirmed(p, firstSeen)
         } else {
             if (p != null && seen != p.from) pending = null
             PlayerEvent.ExternalChange(previous, seen)
@@ -93,9 +106,9 @@ class PlayerLaneTracker(initial: Lane, private val config: EngineConfig) {
     }
 
     /** Debe llamarse en cada fotograma para resolver movimientos que superaron el tiempo máximo. */
-    fun poll(tNs: Long): PlayerEvent? {
+    fun poll(tNs: Long, timeoutNs: Long = config.moveConfirmTimeoutMs * 1_000_000L): PlayerEvent? {
         val p = pending ?: return null
-        if (tNs - pendingIssuedNs < config.moveConfirmTimeoutMs * 1_000_000L) return null
+        if (tNs - pendingIssuedNs < timeoutNs) return null
         pending = null
         return if (sawObservationSincePending) {
             PlayerEvent.MoveFailed(p)

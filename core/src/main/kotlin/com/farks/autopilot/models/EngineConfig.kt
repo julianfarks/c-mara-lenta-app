@@ -12,14 +12,14 @@ data class EngineConfig(
     val maxCoastMs: Long = 400,
     /** Sin fotogramas durante este tiempo => el estado de los carriles pasa a DESCONOCIDO. */
     val staleMs: Long = 500,
-    val minMoveIntervalMs: Long = 350,
+    val minMoveIntervalMs: Long = 200,
     /** Tiempo mínimo antes de poder cambiar de dirección (izquierda<->derecha). */
     val reverseGuardMs: Long = 600,
     /** Tiempo máximo para ver que el cambio de carril se produjo. */
     val moveConfirmTimeoutMs: Long = 700,
     /** Duración del cambio de carril (el jugador ocupa ambos carriles mientras dura). */
     val laneChangeSec: Float = 0.20f,
-    val safetyMarginSec: Float = 0.18f,
+    val safetyMarginSec: Float = 0.12f,
     /** Tiempo que un obstáculo bloquea el carril desde que llega a la línea de colisión. */
     val dwellSec: Float = 0.55f,
     val horizonSec: Float = 1.8f,
@@ -35,4 +35,48 @@ data class EngineConfig(
     /** Peso de un obstáculo aún sin confirmar (1 solo fotograma) en la planificación. */
     val tentativeWeight: Float = 0.05f,
     val minDetectionConfidence: Float = 0.35f,
-)
+
+    // ---- Reacción anticipada y compensación de latencia -----------------------------------
+    /** Retardo inicial supuesto entre ordenar el gesto y que el vehículo empiece a moverse; se aprende en uso. */
+    val actuationDelaySec: Float = 0.10f,
+    /** Retardo de captura anterior a la marca de tiempo del fotograma (composición, buffers). */
+    val captureLagSec: Float = 0.03f,
+    /** El planificador cuenta con la edad de la imagen y el retardo del gesto antes de que el vehículo se mueva. */
+    val compensateLatency: Boolean = true,
+    /** Aprende el retardo real midiendo cuánto tarda el cambio en verse en pantalla. */
+    val learnLatency: Boolean = true,
+    /** Tiempo que un obstáculo ocupa el carril según su velocidad y tamaño, en vez de un valor fijo. */
+    val adaptiveDwell: Boolean = true,
+    val minDwellSec: Float = 0.25f,
+    val maxDwellSec: Float = 1.2f,
+    /** Velocidad por inferencia bayesiana: mezcla la medición con la velocidad habitual del juego. */
+    val speedPrior: Boolean = true,
+    /** Ruido típico de la posición vertical medida (normalizado; ≈1,5 px en 1200). */
+    val depthNoise: Float = 0.0012f,
+    /** Cuántas desviaciones típicas del TTC se ensancha la ventana de un obstáculo (0 = sin incertidumbre). */
+    val uncertaintyK: Float = 0.5f,
+    val maxUncertaintySec: Float = 0.4f,
+    /** Veto duro: no se entra en un carril con un obstáculo confirmado llegando durante el cambio. */
+    val transitVeto: Boolean = true,
+    /** Ignora detecciones inmóviles sobre el propio vehículo (partes del sprite fuera de la caja calibrada). */
+    val selfFilter: Boolean = true,
+    val selfStaticSec: Float = 0.15f,
+    /** Un cambio de carril del jugador que no se ordenó debe persistir este tiempo para aceptarse. */
+    val externalChangeMs: Long = 350,
+    /** El carril ORDENADO se acepta con una sola observación fiable (el esperado no necesita histéresis). */
+    val confirmExpectedInOneFrame: Boolean = true,
+    /** Confirma con 2 fotogramas si la trayectoria es coherente con un obstáculo que se acerca. */
+    val fastConfirm: Boolean = false,
+    /** Rango de velocidad aceptado para la confirmación rápida, relativo a la velocidad habitual del juego. */
+    val fastConfirmMinRel: Float = 0.5f,
+    val fastConfirmMaxRel: Float = 2.5f,
+) {
+    companion object {
+        /** Comportamiento anterior a la optimización de reacción (para comparar en pruebas). */
+        fun legacy(base: EngineConfig = EngineConfig()) = base.copy(
+            compensateLatency = false, learnLatency = false, adaptiveDwell = false, speedPrior = false,
+            uncertaintyK = 0f, safetyMarginSec = 0.18f, transitVeto = false, selfFilter = false, externalChangeMs = 0,
+            confirmExpectedInOneFrame = false, minMoveIntervalMs = 350, fastConfirm = false,
+        )
+    }
+}

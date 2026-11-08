@@ -6,6 +6,7 @@ import com.farks.autopilot.models.Lane
 import com.farks.autopilot.models.LaneDetection
 import com.farks.autopilot.models.RectN
 import kotlin.math.abs
+import kotlin.math.max
 
 /** Un obstáculo seguido a lo largo de varios fotogramas. */
 class Track(
@@ -25,6 +26,12 @@ class Track(
     /** Velocidad aparente de aproximación en unidades de profundidad por segundo. */
     var speed: Float? = null
 
+    /** Desviación típica (1 σ) de la velocidad estimada. */
+    var speedSigma: Float = Float.MAX_VALUE
+
+    /** Instante en que alcanzó la confianza para actuar sobre él. */
+    var confirmedNs: Long? = null
+
     /** Muestras (segundos desde el primer avistamiento, profundidad). */
     internal val samples = ArrayDeque<DoubleArray>()
 }
@@ -37,7 +44,7 @@ class Track(
  * - Mantiene un obstáculo "a ciegas" (coasting) unos milisegundos si desaparece.
  */
 class ObstacleTracker(
-    private val profile: GameProfile,
+    val profile: GameProfile,
     private val config: EngineConfig,
 ) {
     private val geo = profile.road
@@ -55,7 +62,7 @@ class ObstacleTracker(
         worldSpeed = null
     }
 
-    fun isConfirmed(t: Track): Boolean = t.hits >= config.confirmFrames
+    fun isConfirmed(t: Track): Boolean = t.confirmedNs != null || t.hits >= config.confirmFrames
 
     private val collisionDepth: Float get() = geo.depthProxy(profile.collisionY)
 
@@ -65,7 +72,39 @@ class ObstacleTracker(
         return (span / config.fallbackCrossSec).coerceAtLeast(0.05f)
     }
 
-    fun speedOf(t: Track): Float = t.speed ?: worldSpeed ?: fallbackSpeed()
+    fun speedOf(t: Track): Float = t.speed ?: priorSpeed()
+
+    /** Velocidad habitual del juego (medida en otros obstáculos) o, si no hay, la supuesta. */
+    fun priorSpeed(): Float = worldSpeed ?: fallbackSpeed()
+
+    /** Incertidumbre relativa de la velocidad de un obstáculo (σ/velocidad). */
+    private fun priorSigma(): Float = priorSpeed() * (if (worldSpeed != null) 0.25f else 0.6f)
+
+    fun speedSigmaOf(t: Track): Float = if (t.speed != null) t.speedSigma else priorSigma()
+
+    /** Incertidumbre (1 σ, s) del tiempo hasta colisión: crece con el TTC y baja al medir más. */
+    fun ttcSigmaSec(t: Track, nowNs: Long): Float {
+        val ttc = ttcSec(t, nowNs).coerceAtLeast(0f)
+        val rel = (speedSigmaOf(t) / speedOf(t)).coerceAtMost(1f)
+        return (ttc * rel).coerceAtMost(config.maxUncertaintySec)
+    }
+
+    /**
+     * Tiempo que el obstáculo ocupa la zona del jugador: desde que su borde inferior alcanza el
+     * borde superior del vehículo hasta que su borde superior sale por debajo del vehículo.
+     * Depende de la velocidad y del tamaño aparente (un coche lento o largo bloquea más tiempo).
+     */
+    fun dwellSecFor(t: Track): Float {
+        if (!config.adaptiveDwell) return config.dwellSec
+        val v = speedOf(t)
+        if (v < 0.05f) return config.dwellSec
+        val hc = max(t.box.height, 0.9f * t.box.width)
+        val lwNow = geo.laneWidth(t.box.bottom.coerceIn(geo.farY, geo.nearY)).coerceAtLeast(0.01f)
+        val pb = profile.playerBox.bottom
+        val yClear = pb + hc * geo.laneWidth(pb.coerceIn(geo.farY, geo.nearY)) / lwNow
+        val span = geo.depthProxy(profile.collisionY) - geo.depthProxy(yClear.coerceAtMost(geo.nearY + 0.5f))
+        return (span / v).coerceIn(config.minDwellSec, config.maxDwellSec)
+    }
 
     fun depthNow(t: Track, nowNs: Long): Float {
         val dt = ((nowNs - t.lastSeenNs) / 1e9).toFloat().coerceAtLeast(0f)
@@ -118,6 +157,7 @@ class ObstacleTracker(
                 if (!usedDet[di]) {
                     val t = Track(nextId++, lane, tNs, d.box, geo.depthProxy(d.box.bottom))
                     t.samples.addLast(doubleArrayOf(0.0, t.lastDepth.toDouble()))
+                    if (config.confirmFrames <= 1) t.confirmedNs = tNs
                     list += t
                 }
             }
@@ -134,18 +174,77 @@ class ObstacleTracker(
     }
 
     private fun applyMatch(t: Track, d: LaneDetection, tNs: Long) {
+        // Una detección que toca la zona del jugador está recortada por abajo: su borde inferior ya no
+        // indica la profundidad real. Se mantiene vivo el seguimiento extrapolando y no se mide con ella.
+        val atZone = config.speedPrior && d.box.bottom >= profile.collisionY - 0.008f
+        val extrapolated = depthNow(t, tNs)
         t.box = d.box
         t.hits++
         t.consecutiveHits++
         t.misses = 0
+        if (t.confirmedNs == null && t.hits >= config.confirmFrames) t.confirmedNs = tNs
         t.lastSeenNs = tNs
+        if (atZone) {
+            t.lastDepth = extrapolated
+            return
+        }
         t.lastDepth = geo.depthProxy(d.box.bottom)
         val ts = (tNs - t.firstSeenNs) / 1e9
         t.samples.addLast(doubleArrayOf(ts, t.lastDepth.toDouble()))
         while (t.samples.size > 12 || (t.samples.size > 2 && ts - t.samples.first()[0] > 0.6)) {
             t.samples.removeFirst()
         }
-        fitSpeed(t)
+        if (config.speedPrior) fitSpeedBayes(t) else fitSpeed(t)
+        if (config.fastConfirm && t.confirmedNs == null && t.hits >= 2 && approachesConsistently(t)) t.confirmedNs = tNs
+    }
+
+    /**
+     * ¿Se mueve como un obstáculo real? Avanza hacia el jugador a una velocidad cercana a la habitual
+     * del juego y no salta de posición. Un parpadeo de la detección (reflejo, sombra) casi nunca lo cumple.
+     */
+    private fun approachesConsistently(t: Track): Boolean {
+        val s = t.samples
+        if (s.size < 2) return false
+        val a = s[s.size - 2]
+        val b = s[s.size - 1]
+        val dt = b[0] - a[0]
+        if (dt < 0.01) return false
+        val v = ((a[1] - b[1]) / dt).toFloat()
+        val prior = priorSpeed()
+        return v >= config.fastConfirmMinRel * prior && v <= config.fastConfirmMaxRel * prior
+    }
+
+    /**
+     * Velocidad = media ponderada por precisión entre la pendiente medida (regresión de la profundidad
+     * en el tiempo) y la velocidad habitual del juego. Con pocas muestras manda la costumbre; con
+     * muchas manda la medición. Así el TTC es útil desde el primer fotograma sin fiarse de ruido.
+     */
+    private fun fitSpeedBayes(t: Track) {
+        val s = t.samples
+        if (s.size < 2) return
+        val n = s.size
+        val mt = s.sumOf { it[0] } / n
+        val md = s.sumOf { it[1] } / n
+        var cov = 0.0
+        var varT = 0.0
+        for (p in s) {
+            cov += (p[0] - mt) * (p[1] - md)
+            varT += (p[0] - mt) * (p[0] - mt)
+        }
+        if (varT < 1e-6) return
+        val fit = (-(cov / varT)).toFloat()
+        // Ruido de la profundidad: du = u² · dy
+        val u = md.toFloat()
+        val sigmaU = (config.depthNoise * u * u).toDouble()
+        val varFit = (sigmaU * sigmaU / varT).coerceAtLeast(1e-6)
+        val prior = priorSpeed()
+        val sp = priorSigma().toDouble()
+        val varPrior = sp * sp
+        val prec = 1.0 / varFit + 1.0 / varPrior
+        var post = ((fit / varFit) + (prior / varPrior)) / prec
+        if (post < 0.05) post = 0.05
+        t.speed = post.toFloat()
+        t.speedSigma = kotlin.math.sqrt(1.0 / prec).toFloat()
     }
 
     private fun fitSpeed(t: Track) {
@@ -168,6 +267,7 @@ class ObstacleTracker(
         if (fit > 0.05f) {
             val prev = t.speed
             t.speed = if (prev == null) fit else 0.6f * prev + 0.4f * fit
+            t.speedSigma = 0.1f * t.speed!!
         }
     }
 

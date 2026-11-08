@@ -185,6 +185,29 @@ class DiagnosticsActivity : AppCompatActivity() {
             sb.append("Decisión: ${o.decision.action}${o.decision.targetLane?.let { " → $it" } ?: ""}\n")
             sb.append("Motivo: ${o.decision.reason}\n")
             sb.append("Riesgo del plan: %.2f  sin salida: %s\n".format(Locale.US, o.decision.risk, o.decision.deadEnd))
+            sb.append("Latencias: edad de imagen %.0f ms  retardo gesto→movimiento %.0f ms (%d muestras)\n".format(
+                Locale.US, o.latency.frameAgeMs, o.latency.actuationMs, o.latency.actuationSamples))
+            val now = System.nanoTime()
+            if (o.tracks.isNotEmpty()) {
+                sb.append("Obstáculos seguidos (visto hace / confirmado tras / TTC±σ):\n")
+                for (t in o.tracks.sortedBy { it.ttcSec }.take(6)) {
+                    val seen = (now - t.firstSeenNs) / 1e6f
+                    val conf = t.confirmedNs?.let { "%.0f ms".format(Locale.US, (it - t.firstSeenNs) / 1e6f) } ?: "sin confirmar"
+                    val ttc = if (t.ttcSec.isFinite() && t.ttcSec < 99f) "%.2f±%.2fs".format(Locale.US, t.ttcSec, t.ttcSigmaSec) else "-"
+                    sb.append(" #%d %-6s %4.0f ms | %-12s | %s\n".format(Locale.US, t.id, t.lane.name, seen, conf, ttc))
+                }
+            }
+            if (o.reactions.isNotEmpty()) {
+                sb.append("Reacciones recientes (ms desde el primer avistamiento):\n")
+                fun f(v: Float?) = v?.let { "%.0f".format(Locale.US, it) } ?: "-"
+                for (r in o.reactions.takeLast(4).reversed()) {
+                    sb.append(" #%d %s→%s [%s]\n   visto→confirmado %s | →decisión %s | decisión→gesto %s | gesto→fin %s | decisión→cambio visto %s\n   TOTAL %s ms  margen al llegar %s s  ttc en decisión %s s\n".format(
+                        Locale.US, r.commandId, r.from.name, r.target.name, r.outcome,
+                        f(r.detectToConfirmMs), f(r.detectToDecisionMs), f(r.decisionToSentMs), f(r.sentToDoneMs), f(r.decisionToChangeMs),
+                        f(r.totalReactionMs), r.marginAtChangeSec?.let { "%.2f".format(Locale.US, it) } ?: "-",
+                        r.ttcAtDecisionSec?.let { "%.2f".format(Locale.US, it) } ?: "-"))
+                }
+            }
         }
         s.lastError?.let { sb.append("ÚLTIMO ERROR: $it\n") }
         info.text = sb.toString()

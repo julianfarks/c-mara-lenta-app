@@ -33,6 +33,7 @@ object ProfileCodec {
                 "${f(r.farLeft.x)},${f(r.farLeft.y)},${f(r.farRight.x)},${f(r.farRight.y)}")
             appendLine("player=${f(p.playerBox.left)},${f(p.playerBox.top)},${f(p.playerBox.right)},${f(p.playerBox.bottom)}")
             appendLine("lane=${p.playerLane.index}")
+            p.playerColor?.let { appendLine("playercolor=${f(it.l)},${f(it.a)},${f(it.b)}") }
             appendLine("model=" + s.colorModel.joinToString(",") { f(it) })
         }
     }
@@ -51,9 +52,10 @@ object ProfileCodec {
                     PointN(road[4], road[5]), PointN(road[6], road[7]),
                 )
                 val lane = Lane.fromIndex(kv.getValue("lane").toInt())
-                if (lane == null) null else StoredProfile(
+                val pc = kv["playercolor"]?.split(',')?.map { it.toFloat() }
+                if (lane == null || (pc != null && pc.size != 3)) null else StoredProfile(
                     GameProfile(unhex(kv.getValue("package")), unhex(kv.getValue("name")), geo,
-                        RectN(pl[0], pl[1], pl[2], pl[3]), lane),
+                        RectN(pl[0], pl[1], pl[2], pl[3]), lane, pc?.let { LabColor(it[0], it[1], it[2]) }),
                     model,
                 )
             }

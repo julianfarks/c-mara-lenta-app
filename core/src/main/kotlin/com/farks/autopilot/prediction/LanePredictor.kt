@@ -23,8 +23,11 @@ class LanePredictor(private val config: EngineConfig) {
             val confirmed = tracker.isConfirmed(t)
             // Un obstáculo desaparecido sigue ocupando su sitio: se adelanta un poco por incertidumbre.
             val uncertainty = 0.05f * t.misses
-            val arrive = tracker.ttcSec(t, nowNs) - uncertainty
-            val clear = arrive + config.dwellSec
+            val nominal = tracker.ttcSec(t, nowNs) - uncertainty
+            // Incertidumbre propia del tiempo de llegada: ancha al principio, estrecha con más fotogramas.
+            val sigma = if (confirmed) config.uncertaintyK * tracker.ttcSigmaSec(t, nowNs) else 0f
+            val arrive = nominal - sigma
+            val clear = nominal + tracker.dwellSecFor(t) + sigma
             if (clear < -config.safetyMarginSec) continue
             val weight = if (confirmed) 1f else config.tentativeWeight
             result.getValue(t.lane) += ObstacleWindow(t.id, arrive, clear, weight)

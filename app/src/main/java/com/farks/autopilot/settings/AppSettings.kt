@@ -17,15 +17,15 @@ class AppSettings(context: Context) {
         set(v) = sp.edit().putFloat("swipeFraction", v.coerceIn(0.05f, 0.9f)).apply()
 
     var swipeDurationMs: Int
-        get() = sp.getInt("swipeDurationMs", 90)
+        get() = sp.getInt("swipeDurationMs", 60)
         set(v) = sp.edit().putInt("swipeDurationMs", v.coerceIn(30, 400)).apply()
 
     var minMoveIntervalMs: Int
-        get() = sp.getInt("minMoveIntervalMs", 350)
+        get() = sp.getInt("minMoveIntervalMs", 200)
         set(v) = sp.edit().putInt("minMoveIntervalMs", v.coerceIn(150, 2000)).apply()
 
     var safetyMarginSec: Float
-        get() = sp.getFloat("safetyMarginSec", 0.18f)
+        get() = sp.getFloat("safetyMarginSec", 0.12f)
         set(v) = sp.edit().putFloat("safetyMarginSec", v.coerceIn(0.05f, 0.6f)).apply()
 
     var laneChangeSec: Float

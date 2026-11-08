@@ -188,12 +188,34 @@ class PlayerLaneTrackerTest {
 
     @Test
     fun confirmsMoveAfterConsecutiveObservations() {
-        val t = PlayerLaneTracker(Lane.CENTER, cfg)
+        val t = PlayerLaneTracker(Lane.CENTER, cfg.copy(confirmExpectedInOneFrame = false))
         t.onMoveIssued(0, cmd(Lane.CENTER, Lane.RIGHT))
         assertNull(t.onObservation(obs(Lane.RIGHT)))
         val e = t.onObservation(obs(Lane.RIGHT))
         assertTrue(e is PlayerEvent.MoveConfirmed)
         assertEquals(Lane.RIGHT, t.lane)
+    }
+
+    @Test
+    fun orderedLaneIsConfirmedWithOneReliableObservation() {
+        val t = PlayerLaneTracker(Lane.CENTER, cfg)
+        t.onMoveIssued(0, cmd(Lane.CENTER, Lane.RIGHT))
+        assertTrue(t.onObservation(obs(Lane.RIGHT)) is PlayerEvent.MoveConfirmed)
+    }
+
+    @Test
+    fun unorderedLaneNeedsSeveralFramesAndPersistence() {
+        val t = PlayerLaneTracker(Lane.CENTER, cfg)
+        val ms = 1_000_000L
+        // un coche que pasa junto al jugador: 200 ms en otro carril, sin orden previa
+        for (i in 0..6) assertNull(t.onObservation(obs(Lane.LEFT), i * 33 * ms))
+        assertEquals(Lane.CENTER, t.lane)
+        t.onObservation(obs(Lane.CENTER), 7 * 33 * ms) // vuelve
+        // un cambio real persiste más de 350 ms
+        var ev: PlayerEvent? = null
+        for (i in 8..22) ev = t.onObservation(obs(Lane.LEFT), i * 33 * ms) ?: ev
+        assertTrue(ev is PlayerEvent.ExternalChange)
+        assertEquals(Lane.LEFT, t.lane)
     }
 
     @Test

@@ -36,6 +36,8 @@ class ScreenCapturer(
     private var display: VirtualDisplay? = null
 
     @Volatile private var latest: Frame? = null
+    /** Se invoca (en el hilo de captura) cada vez que llega un fotograma nuevo: análisis dirigido por eventos. */
+    @Volatile var onFrameAvailable: (() -> Unit)? = null
     @Volatile var framesReceived: Long = 0
         private set
     private var bytes = ByteArray(0)
@@ -96,6 +98,7 @@ class ScreenCapturer(
         } finally {
             image.close()
         }
+        onFrameAvailable?.invoke()
     }
 
     /** Devuelve y consume el último fotograma (el llamador libera el Mat), o null si no hay uno nuevo. */
@@ -105,6 +108,8 @@ class ScreenCapturer(
         latest = null
         return f
     }
+
+    fun hasPending(): Boolean = latest != null
 
     @Synchronized
     fun release() {

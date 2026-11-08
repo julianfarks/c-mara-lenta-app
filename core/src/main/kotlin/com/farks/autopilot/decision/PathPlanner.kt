@@ -54,6 +54,11 @@ class PathPlanner(private val config: EngineConfig) {
         lastDir: Int,
         /** No se permite iniciar movimientos antes de este instante (p. ej. hay uno pendiente). */
         blockedForSec: Float,
+        /**
+         * Instante más temprano en que un gesto ordenado AHORA hace que el vehículo empiece a moverse
+         * (edad de la imagen + retardo del gesto). "Mover ya" significa mover en ese instante.
+         */
+        earliestSec: Float = 0f,
     ): PlanResult {
         val dt = config.planStepSec
         val n = ceil(config.horizonSec / dt).toInt()
@@ -61,7 +66,8 @@ class PathPlanner(private val config: EngineConfig) {
         val minIntervalSteps = ceil(config.minMoveIntervalMs / 1000f / dt).toInt()
         val reverseSteps = ceil(config.reverseGuardMs / 1000f / dt).toInt()
         val cap = max(minIntervalSteps, reverseSteps) + 1
-        val blockSteps = ceil(blockedForSec / dt).toInt().coerceAtLeast(0)
+        val nowStep = ceil(earliestSec / dt).toInt().coerceAtLeast(0)
+        val blockSteps = max(nowStep, ceil(blockedForSec / dt).toInt().coerceAtLeast(0))
 
         // Tablas de penalización y holgura por carril y paso.
         val pen = Array(3) { FloatArray(n + t + 1) }
@@ -145,7 +151,7 @@ class PathPlanner(private val config: EngineConfig) {
                         p += max(pen[lane][x], pen[to][x])
                         c = min(c, min(clr[lane][x], clr[to][x]))
                     }
-                    val startMove = if (s == 0) d else node.startMove
+                    val startMove = if (s == nowStep) d else node.startMove
                     offer(
                         e,
                         key(to, min(cap, e - s), d),

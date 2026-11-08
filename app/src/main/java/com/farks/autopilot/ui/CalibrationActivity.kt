@@ -21,7 +21,9 @@ import com.farks.autopilot.models.Lane
 import com.farks.autopilot.models.PointN
 import com.farks.autopilot.models.RectN
 import com.farks.autopilot.vision.OpenCvObstacleDetector
+import com.farks.autopilot.vision.PlayerAppearance
 import com.farks.autopilot.vision.RoadColorModel
+import com.farks.autopilot.vision.RoadExtender
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.Mat
@@ -180,10 +182,14 @@ class CalibrationActivity : AppCompatActivity() {
 
     private fun learn() {
         val bmp = refBitmap ?: return
-        val profile = buildProfile() ?: return
+        val base = buildProfile() ?: return
         val mat = Mat()
         try {
             Utils.bitmapToMat(bmp, mat)
+            // 1) Si el borde lejano se marcó por debajo del inicio real de la calzada, se extiende hacia el horizonte
+            //    (mayor alcance de detección). 2) Se aprende el color del vehículo del jugador.
+            val ext = RoadExtender.extendFar(mat, base.road)
+            val profile = base.copy(road = ext.road, playerColor = PlayerAppearance.learn(mat, base.playerBox))
             val grow = RectN(
                 profile.playerBox.left - 0.02f, profile.playerBox.top - 0.02f,
                 profile.playerBox.right + 0.02f, profile.playerBox.bottom + 0.02f,
@@ -194,6 +200,9 @@ class CalibrationActivity : AppCompatActivity() {
             val playerOk = res.player.lane == profile.playerLane
             val sb = StringBuilder()
             sb.append("Modelo de color aprendido (${RoadColorModel.N_BANDS} franjas).\n")
+            if (ext.extended) sb.append("Borde lejano extendido automáticamente de y=%.2f a y=%.2f (más alcance de detección).\n".format(ext.originalFarY, ext.newFarY))
+            else sb.append("Borde lejano: sin extensión posible (la calzada no continúa por encima del punto marcado).\n")
+            sb.append("Color de su vehículo: ${if (profile.playerColor != null) "aprendido" else "no disponible"}.\n")
             sb.append("Verificación sobre la propia referencia:\n")
             sb.append(" • Obstáculos detectados: ${res.detections.size} (esperado 0 si la carretera estaba vacía)\n")
             sb.append(" • Su vehículo se localiza en: ${res.player.lane ?: "no localizado"} (marcado: ${profile.playerLane})\n")

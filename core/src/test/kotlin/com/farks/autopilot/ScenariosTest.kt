@@ -171,8 +171,11 @@ class ScenariosTest {
         val engine = newEngine()
         repeat(5) { engine.onFrame(world.step()) }
         world.forceLane(Lane.LEFT)
+        // Un cambio que no se ordenó debe persistir (externalChangeMs = 350 ms) para aceptarse:
+        // un coche que pasa junto al jugador no debe hacerle "cambiar de carril".
         var out = engine.onFrame(world.step())
-        out = engine.onFrame(world.step())
+        assertEquals("aún no: ${out.playerLane}", Lane.CENTER, out.playerLane)
+        repeat(9) { out = engine.onFrame(world.step()) }
         assertEquals(Lane.LEFT, out.playerLane)
     }
 

@@ -154,7 +154,32 @@ class AutopilotService : Service() {
             )
         }
         windowStartNs = System.nanoTime()
-        analysis?.post { tick() }
+        // Análisis dirigido por eventos: cada fotograma nuevo dispara el análisis (sin esperar a un temporizador),
+        // limitado a maxAnalysisFps. Un vigilante comprueba fotogramas caducados si la captura se queda sin imágenes.
+        capturer?.onFrameAvailable = { requestAnalysis() }
+        analysis?.postDelayed({ watchdog() }, 100)
+    }
+
+    private val scheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastStartNs = 0L
+
+    private fun requestAnalysis() {
+        if (!active || !scheduled.compareAndSet(false, true)) return
+        val h = analysis ?: run { scheduled.set(false); return }
+        val minGapNs = (1_000_000_000L / settings.maxAnalysisFps.coerceIn(5, 30))
+        val wait = (lastStartNs + minGapNs - System.nanoTime()) / 1_000_000L
+        h.postDelayed({ tick() }, wait.coerceAtLeast(0))
+    }
+
+    private fun watchdog() {
+        if (!active) return
+        val eng = engine
+        val h = analysis ?: return
+        if (eng != null && capturer?.let { System.nanoTime() - lastStartNs > 250_000_000L } == true) {
+            eng.checkStale(System.nanoTime())?.let { publish(it, null, null) }
+            requestAnalysis() // si hay un fotograma pendiente, procesarlo
+        }
+        h.postDelayed({ watchdog() }, 100)
     }
 
     private fun startForegroundCompat() {
@@ -214,20 +239,15 @@ class AutopilotService : Service() {
     // ------------------------------------------------------------------ bucle de análisis
 
     private fun tick() {
+        scheduled.set(false)
         if (!active) return
         val eng = engine ?: return
         val det = detector ?: return
         val cap = capturer ?: return
-        val h = analysis ?: return
 
-        val frame = cap.takeLatest()
-        if (frame == null) {
-            eng.checkStale(System.nanoTime())?.let { publish(it, null, null) }
-            h.postDelayed({ tick() }, 8)
-            return
-        }
-
+        val frame = cap.takeLatest() ?: return
         val t0 = System.nanoTime()
+        lastStartNs = t0
         try {
             val fg = GestureAccessibilityService.foregroundPackage == pkg
             if (!fg) {
@@ -235,14 +255,14 @@ class AutopilotService : Service() {
                     pausedNotForeground = true
                     publish(eng.onCaptureLost(frame.timestampNs, "El juego no está en primer plano"), null, null)
                 }
-                h.postDelayed({ tick() }, 100)
                 return
             }
             if (pausedNotForeground) { pausedNotForeground = false; eng.onCaptureResumed() }
 
             eng.armed = GestureAccessibilityService.isConnected
             val res = det.detect(frame.mat)
-            val out = eng.onFrame(FrameObservation(frame.timestampNs, res.detections, res.player))
+            // processedAtNs: el motor descuenta la edad real de la imagen (captura -> fin de detección) al decidir.
+            val out = eng.onFrame(FrameObservation(frame.timestampNs, res.detections, res.player, System.nanoTime()))
 
             out.command?.let { execute(it, eng, cap) }
             publish(out, res, frame)
@@ -251,13 +271,10 @@ class AutopilotService : Service() {
         } finally {
             frame.release()
         }
-
         val ms = (System.nanoTime() - t0) / 1e6f
         avgMs = avgMs * 0.9f + ms * 0.1f
-        // Adaptativo: entre settings.maxAnalysisFps (≤30) y 15 análisis/s según la carga.
-        val minInterval = 1000f / settings.maxAnalysisFps
-        val interval = (avgMs * 1.2f).coerceIn(minInterval, 1000f / 15f)
-        h.postDelayed({ tick() }, (interval - ms).coerceAtLeast(1f).toLong())
+        // Si ya llegó otro fotograma mientras se analizaba, encadenar sin esperar.
+        if (cap.hasPending()) requestAnalysis()
     }
 
     private fun execute(cmd: MoveCommand, eng: AutopilotEngine, cap: ScreenCapturer) {
@@ -266,8 +283,8 @@ class AutopilotService : Service() {
         val accepted = svc?.swipe(
             cmd.direction, cap.screenW, cap.screenH,
             profile.playerBox.centerY, settings.swipeFraction, settings.swipeDurationMs,
-        ) { ok -> analysis?.post { eng.onGestureResult(cmd.id, ok); if (!ok) failed++ } } ?: false
-        if (accepted) sent++ else {
+        ) { ok -> val tDone = System.nanoTime(); analysis?.post { eng.onGestureResult(cmd.id, ok, tDone); if (!ok) failed++ } } ?: false
+        if (accepted) { sent++; eng.onGestureDispatched(cmd.id, System.nanoTime()) } else {
             failed++
             eng.onGestureResult(cmd.id, false)
             AutopilotState.log.add(System.currentTimeMillis(), LogLevel.ERROR,

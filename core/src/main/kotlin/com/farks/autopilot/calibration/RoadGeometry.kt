@@ -98,6 +98,9 @@ data class RoadGeometry(
     }
 }
 
+/** Color en espacio Lab de 8 bits de OpenCV (L, a, b en 0..255). */
+data class LabColor(val l: Float, val a: Float, val b: Float)
+
 /** Perfil de calibración de un videojuego. */
 data class GameProfile(
     val packageName: String,
@@ -106,6 +109,8 @@ data class GameProfile(
     /** Caja del automóvil del jugador en el carril donde se calibró. */
     val playerBox: RectN,
     val playerLane: Lane,
+    /** Color del vehículo del jugador (calibración); permite distinguirlo de otros coches que pasan a su lado. */
+    val playerColor: LabColor? = null,
 ) {
     /** Línea de colisión: el borde superior del automóvil del jugador. */
     val collisionY: Float get() = playerBox.top

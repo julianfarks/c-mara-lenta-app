@@ -58,9 +58,12 @@ data class PlayerObservation(val lane: Lane?, val confidence: Float)
 
 /** Todo lo que el motor recibe por cada fotograma analizado. */
 data class FrameObservation(
+    /** Instante en que se capturó la imagen. */
     val timestampNs: Long,
     val detections: List<Detection>,
     val player: PlayerObservation? = null,
+    /** Instante en que el análisis terminó y se decide (>= timestampNs). La diferencia es la edad de la imagen. */
+    val processedAtNs: Long = timestampNs,
 )
 
 data class LaneAssessment(
@@ -99,6 +102,51 @@ data class TrackView(
     val coasting: Boolean,
     val ttcSec: Float,
     val speed: Float,
+    /** Cuándo se vio por primera vez (nanoTime de captura). */
+    val firstSeenNs: Long = 0L,
+    /** Cuándo alcanzó la confianza para actuar sobre él; null si aún no. */
+    val confirmedNs: Long? = null,
+    /** Incertidumbre (1 σ) del TTC, en segundos. */
+    val ttcSigmaSec: Float = 0f,
+)
+
+/** Línea de tiempo de una reacción: del primer avistamiento a la confirmación visual del cambio. */
+data class ReactionRecord(
+    val commandId: Long,
+    val direction: MoveDirection,
+    val from: Lane,
+    val target: Lane,
+    val triggerTrackId: Int?,
+    val firstSeenNs: Long?,
+    val confirmedNs: Long?,
+    /** Edad de la imagen que motivó la decisión. */
+    val frameAgeMs: Float,
+    val decisionNs: Long,
+    val gestureSentNs: Long?,
+    val gestureDoneNs: Long?,
+    /** Captura del fotograma en que la visión vio completado el cambio (hacia mitad del trayecto). */
+    val laneChangedNs: Long?,
+    val ttcAtDecisionSec: Float?,
+    /** Tiempo que quedaba para que el obstáculo llegara cuando se vio el cambio; negativo = tarde. */
+    val marginAtChangeSec: Float?,
+    val outcome: String,
+) {
+    private fun ms(a: Long?, b: Long?): Float? = if (a != null && b != null) (b - a) / 1e6f else null
+    val detectToConfirmMs get() = ms(firstSeenNs, confirmedNs)
+    val detectToDecisionMs get() = ms(firstSeenNs, decisionNs)
+    val decisionToSentMs get() = ms(decisionNs, gestureSentNs)
+    val sentToDoneMs get() = ms(gestureSentNs, gestureDoneNs)
+    val decisionToChangeMs get() = ms(decisionNs, laneChangedNs)
+    /** Tiempo total de reacción: primer avistamiento -> cambio de carril visto. */
+    val totalReactionMs get() = ms(firstSeenNs, laneChangedNs)
+}
+
+/** Estimación de latencias que el motor usa para planificar. */
+data class LatencyStats(
+    val frameAgeMs: Float = 0f,
+    /** Retardo estimado entre ordenar el gesto y que el vehículo empiece a moverse. */
+    val actuationMs: Float = 0f,
+    val actuationSamples: Int = 0,
 )
 
 enum class LogLevel { INFO, WARN, ERROR }
@@ -118,4 +166,6 @@ data class EngineOutput(
     val command: MoveCommand?,
     val events: List<EngineEvent>,
     val dangerLevel: Float,
+    val latency: LatencyStats = LatencyStats(),
+    val reactions: List<ReactionRecord> = emptyList(),
 )

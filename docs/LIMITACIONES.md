@@ -22,3 +22,20 @@
 **Seguridad**
 * Los gestos solo se emiten con el juego elegido en primer plano y el piloto armado; hay parada de emergencia.
 * Automatizar juegos en línea puede violar sus términos de servicio.
+
+## Optimización de reacción (v2): qué se midió y qué NO
+
+**Qué cambió**
+- Predicción temporal: velocidad del obstáculo estimada de forma bayesiana (regresión + velocidad de referencia del juego), TTC con incertidumbre (σ) y ventana de permanencia adaptativa.
+- Planificación con latencia: el motor descuenta la edad real de la imagen, el retardo del gesto (aprendido en marcha) y la duración del cambio de carril; no ordena un segundo cambio mientras el juego aún está en transición.
+- Seguridad: filtro del propio vehículo (detección estática pegada a la zona del jugador), veto si el carril destino se ocupa durante el trayecto, jugador localizado por su color, confirmación visual del cambio.
+- Alcance: la calibración extiende automáticamente el borde lejano hasta donde la calzada continúa visible; resolución de trabajo adaptativa (160–320 px).
+- Rendimiento: análisis dirigido por eventos (hasta 30/s), gesto de 60 ms por defecto.
+- Diagnóstico: por obstáculo (visto hace / confirmado tras / TTC±σ) y por reacción (visto→confirmado→decisión→gesto→fin→cambio visto, tiempo total y margen).
+
+**Resultados (SIMULACIÓN, 60 escenarios, imagen 70 ms, gesto 100 ms, cambio 250 ms, no un juego real)**
+- Choques: 11 (nuevo) frente a 14 (anterior). Mejora modesta: en esta simulación el factor dominante es el alcance de visión y la edad de la imagen, no el margen de seguridad.
+- Movimientos innecesarios: 0 en ambos; un parpadeo de 1 fotograma nunca provoca movimiento (prueba automática).
+- Hay escenarios físicamente inevitables (dos carriles ocupados al fondo y poco tiempo); no se pueden evitar con ningún algoritmo.
+
+**No verificado**: nada de esto se ha ejecutado en un teléfono ni en un juego real; la extensión del borde, el color del jugador y la resolución adaptativa solo se validaron con imágenes sintéticas (los tests de visión corren en CI). Las latencias reales de su dispositivo pueden diferir; el motor aprende el retardo del gesto, pero no se ha medido.

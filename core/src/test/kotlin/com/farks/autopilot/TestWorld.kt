@@ -50,28 +50,65 @@ class World(
     val noise: Float = 0f,
     val playerVisible: Boolean = true,
     seed: Long = 1234,
+    /** Edad de la imagen cuando se decide: captura + análisis (la visión ve el pasado). */
+    val frameLatencyMs: Long = 0,
+    /** Retardo entre ordenar el gesto y que el juego empiece a mover el vehículo. */
+    val actuationDelayMs: Long = 0,
+    /** La visión no detecta obstáculos cuyo borde inferior esté por encima de esta y (rango de visión). */
+    val visibleFromY: Float = 0f,
+    /** Como la visión real: el carril observado cambia a mitad del cambio, no al final. */
+    val midpointObservation: Boolean = false,
+    /** Parpadeos falsos: (instante s, carril, fotogramas que duran). */
+    val phantoms: List<Triple<Float, Lane, Int>> = emptyList(),
 ) {
     val geo = profile.road
+    private val initialLane = startLane
     private val rnd = Random(seed)
     var timeNs = 0L
     var playerLane = startLane
     var collisions = 0
+    private var moveStartNs: Long? = null
     private var moveEndNs: Long? = null
     private var moveFrom: Lane? = null
     private var moveTo: Lane? = null
+    private val phantomLeft = phantoms.map { it.third }.toIntArray()
 
     private val startDepth = geo.depthProxy(geo.farY + 0.01f)
     val timeSec: Float get() = timeNs / 1e9f
     val transitioning: Boolean get() = moveEndNs != null
 
+    /** Gestos en vuelo: (instante de llegada al juego, carril destino). */
+    private val inbox = ArrayList<Pair<Long, Lane>>()
+
+    /** Gestos que el juego ignoró por llegar con el vehículo ya en movimiento. */
+    var droppedGestures = 0
+        private set
+
+    /** El gesto sale ahora y el juego lo recibe tras el retardo; si entonces ya se mueve, lo ignora. */
     fun queueMove(target: Lane) {
-        if (!swipeWorks || moveEndNs != null) return
-        moveFrom = playerLane
-        moveTo = target
-        moveEndNs = timeNs + laneChangeMs * 1_000_000L
+        if (!swipeWorks) return
+        inbox += (timeNs + actuationDelayMs * 1_000_000L) to target
+    }
+
+    private fun deliverGestures() {
+        val it = inbox.iterator()
+        while (it.hasNext()) {
+            val (arrive, target) = it.next()
+            if (timeNs < arrive) continue
+            it.remove()
+            if (moveEndNs != null || target == playerLane) { droppedGestures++; continue }
+            moveFrom = playerLane
+            moveTo = target
+            moveStartNs = timeNs
+            moveEndNs = timeNs + laneChangeMs * 1_000_000L
+            moveLog += longArrayOf(moveStartNs!!, moveEndNs!!)
+            laneIdx += (moveFrom!! to target)
+        }
     }
 
     fun forceLane(l: Lane) {
+        moveLog += longArrayOf(timeNs, timeNs)
+        laneIdx += (playerLane to l)
         playerLane = l
     }
 
@@ -91,21 +128,22 @@ class World(
         return RectN(cx - w / 2, y - h, cx + w / 2, y)
     }
 
-    /** Avanza un paso y devuelve lo que vería la visión. */
+    /** Avanza un paso y devuelve lo que vería la visión (con la edad de imagen configurada). */
     fun step(): FrameObservation {
         timeNs += dtMs * 1_000_000L
         val end = moveEndNs
         if (end != null && timeNs >= end) {
             playerLane = moveTo!!
             moveEndNs = null
+            moveStartNs = null
         }
-        val dets = ArrayList<Detection>()
+        deliverGestures()
+        // Colisión física en el instante actual.
         for (o in obstacles) {
             val box = boxOf(o, timeSec) ?: continue
-            // colisión física
             if (!o.collided && box.bottom >= profile.collisionY) {
                 val occupied = mutableSetOf(playerLane)
-                if (moveEndNs != null) {
+                if (transitioning) {
                     occupied += moveFrom!!
                     occupied += moveTo!!
                 }
@@ -114,15 +152,51 @@ class World(
                     collisions++
                 }
             }
-            if (o.hidden != null && timeSec in o.hidden) continue
+        }
+        // Lo que ve la visión: el pasado (edad de la imagen).
+        val captureNs = (timeNs - frameLatencyMs * 1_000_000L).coerceAtLeast(0L)
+        val capSec = captureNs / 1e9f
+        val dets = ArrayList<Detection>()
+        for (o in obstacles) {
+            val box = boxOf(o, capSec) ?: continue
+            if (box.bottom < visibleFromY) continue
+            if (o.hidden != null && capSec in o.hidden) continue
             val n = { (rnd.nextFloat() - 0.5f) * 2f * noise }
             dets += Detection(
                 RectN(box.left + n(), box.top + n(), box.right + n(), (box.bottom + n())),
                 0.9f,
             )
         }
-        val obs = if (playerVisible && moveEndNs == null) PlayerObservation(playerLane, 0.95f) else null
-        return FrameObservation(timeNs, dets, obs)
+        for ((i, ph) in phantoms.withIndex()) {
+            if (capSec >= ph.first && phantomLeft[i] > 0) {
+                phantomLeft[i]--
+                val y = 0.55f
+                val w = 0.7f * geo.laneWidth(y)
+                val cx = geo.laneCenterX(ph.second, y)
+                dets += Detection(RectN(cx - w / 2, y - w, cx + w / 2, y), 0.8f)
+            }
+        }
+        val obs = if (!playerVisible) null else observePlayer(captureNs)
+        return FrameObservation(captureNs, dets, obs, processedAtNs = timeNs)
+    }
+
+    /** Cambios de carril: (inicio, fin, de, a). El último puede estar en curso (fin = moveEndNs). */
+    private val moveLog = ArrayList<LongArray>()
+    private val laneIdx = ArrayList<Pair<Lane, Lane>>()
+
+    private fun observePlayer(captureNs: Long): PlayerObservation? {
+        var lane = initialLane
+        for (i in moveLog.indices) {
+            val m = moveLog[i]
+            val (from, to) = laneIdx[i]
+            if (captureNs < m[0]) break
+            val mid = (m[0] + m[1]) / 2
+            if (captureNs < m[1]) {
+                return if (midpointObservation) PlayerObservation(if (captureNs >= mid) to else from, 0.95f) else null
+            }
+            lane = to
+        }
+        return PlayerObservation(lane, 0.95f)
     }
 }
 

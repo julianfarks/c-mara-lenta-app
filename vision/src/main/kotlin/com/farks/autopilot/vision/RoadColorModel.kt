@@ -134,4 +134,38 @@ class RoadColorModel(val bands: List<BandStats>) {
     }
 }
 
+/** Color característico del vehículo del jugador (mediana Lab de la parte central de su caja). */
+object PlayerAppearance {
+    fun learn(frame: Mat, box: RectN): com.farks.autopilot.calibration.LabColor? {
+        val x0 = ((box.left + 0.2f * box.width) * frame.cols()).toInt().coerceIn(0, frame.cols() - 2)
+        val x1 = ((box.right - 0.2f * box.width) * frame.cols()).toInt().coerceIn(x0 + 1, frame.cols())
+        val y0 = ((box.top + 0.2f * box.height) * frame.rows()).toInt().coerceIn(0, frame.rows() - 2)
+        val y1 = ((box.bottom - 0.2f * box.height) * frame.rows()).toInt().coerceIn(y0 + 1, frame.rows())
+        val sub = frame.submat(org.opencv.core.Rect(x0, y0, x1 - x0, y1 - y0))
+        val rgb = Mat()
+        when (sub.channels()) {
+            4 -> Imgproc.cvtColor(sub, rgb, Imgproc.COLOR_RGBA2RGB)
+            3 -> sub.copyTo(rgb)
+            else -> Imgproc.cvtColor(sub, rgb, Imgproc.COLOR_GRAY2RGB)
+        }
+        sub.release()
+        val lab = Mat()
+        Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab)
+        rgb.release()
+        val n = lab.rows() * lab.cols()
+        if (n < 20) { lab.release(); return null }
+        val data = ByteArray(n * 3)
+        lab.get(0, 0, data)
+        lab.release()
+        fun med(c: Int): Float {
+            val h = IntArray(256)
+            for (i in 0 until n) h[data[i * 3 + c].toInt() and 0xFF]++
+            var acc = 0
+            for (v in 0 until 256) { acc += h[v]; if (acc >= (n + 1) / 2) return v.toFloat() }
+            return 255f
+        }
+        return com.farks.autopilot.calibration.LabColor(med(0), med(1), med(2))
+    }
+}
+
 internal fun Float.px(total: Int): Int = (this * total).roundToInt()
