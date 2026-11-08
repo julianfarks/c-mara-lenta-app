@@ -285,7 +285,8 @@ class OpenCvObstacleDetector(
                 val yt = cropTop + y / ph
                 val yb = cropTop + (y + h) / ph
                 val lw = road.laneWidth(max(yb, road.farY))
-                val far = yb < road.farY + params.farZoneFrac
+                // Umbral relajado solo si el objeto asoma por encima del asfalto (coche que sale del horizonte).
+                val far = yt < road.farY && yb < road.farY + params.farZoneFrac
                 val mw = if (far) params.farMinWidthLane else params.minWidthLane
                 val mh = if (far) params.farMinHeightLane else params.minHeightLane
                 if ((xr - xl) < mw * lw || (yb - yt) < mh * lw) continue

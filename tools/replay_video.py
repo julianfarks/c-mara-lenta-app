@@ -115,7 +115,7 @@ class Detector:
                 xl_ = self.x0 + x / self.ww * (self.x1 - self.x0); xr_ = self.x0 + (x + w) / self.ww * (self.x1 - self.x0)
                 yt = self.top + y / ph; yb = self.top + (y + h) / ph
                 lwb = lw(max(yb, FAR_Y))
-                far = yb < FAR_Y + .035          # zona del horizonte: el coche apenas asoma, umbrales relajados
+                far = yt < FAR_Y and yb < FAR_Y + .035          # zona del horizonte: el coche apenas asoma, umbrales relajados
                 mw, mh = (.22, .07) if far else (.30, .15)
                 if (xr_ - xl_) < mw * lwb or (yb - yt) < mh * lwb: continue
                 if a / (w * h) < .35: continue
