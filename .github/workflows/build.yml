@@ -45,7 +45,7 @@ jobs:
           for f in glob.glob('*/build/test-results/test/*.xml'):
               for tc in ET.parse(f).getroot().iter('testcase'):
                   for fl in list(tc.iter('failure')) + list(tc.iter('error')):
-                      msg = (fl.get('message') or '').replace('\n', ' ')[:400]
+                      msg = (fl.get('message') or '').replace('\n', ' ')[:3000]
                       print('::error title=%s.%s::%s' % (tc.get('classname'), tc.get('name'), msg))
                       n += 1
           print('::error title=resumen::%d pruebas fallidas' % n)

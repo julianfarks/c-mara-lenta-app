@@ -120,6 +120,8 @@ class DetectorSyntheticTest {
         return if (u > 0) inter / u else 0f
     }
 
+    private fun fmt(b: RectN) = "[%.3f,%.3f,%.3f,%.3f]".format(b.left, b.top, b.right, b.bottom)
+
     private fun detector(): OpenCvObstacleDetector {
         val (ref, _) = render(emptyList(), Lane.CENTER, seed = 99)
         val grow = RectN(playerBox.left - 0.02f, playerBox.top - 0.02f, playerBox.right + 0.02f, playerBox.bottom + 0.02f)
@@ -160,7 +162,7 @@ class DetectorSyntheticTest {
                 if (idx != null && iou(dets[idx].box, box) >= 0.5f) { hits++; used += idx }
                 else {
                     val c = cars.first { it.lane == lane }
-                    missed += "t$trial/$lane d=${c.depthU} rgb=${c.rgb.toList()} box=$box dets=${dets.map { it.box }}"
+                    missed += "t$trial/$lane d=${c.depthU} rgb=${c.rgb.toList()} box=${fmt(box)} dets=${dets.map { fmt(it.box) }}"
                 }
             }
             falsePos += dets.size - used.size
