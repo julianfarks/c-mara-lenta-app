@@ -152,7 +152,12 @@ class DetectorSyntheticTest {
         for (trial in 0 until 60) {
             val lanes = Lane.values().toList().shuffled(rnd).take(1 + rnd.nextInt(3))
             val cars = lanes.map { Car(it, 1.8f + rnd.nextFloat() * 2.1f, COLORS.getValue(names[rnd.nextInt(names.size)])) }
-            val (img, truth) = render(cars, Lane.values()[rnd.nextInt(3)], seed = trial.toLong())
+            val pl = Lane.values()[rnd.nextInt(3)]
+            // Cada prueba es independiente: se reinicia el fondo temporal y se calienta con la carretera vacía
+            // (como en el juego real, donde la vía se ve libre antes de que aparezca un coche).
+            det.resetBackground()
+            for (w in 0 until 3) { val (e, _) = render(emptyList(), pl, seed = 5000L + trial * 10 + w); det.detect(e); e.release() }
+            val (img, truth) = render(cars, pl, seed = trial.toLong())
             val dets = det.detect(img).detections
             img.release()
             val used = HashSet<Int>()
