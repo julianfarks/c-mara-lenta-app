@@ -145,6 +145,7 @@ class DetectorSyntheticTest {
         val det = detector()
         val rnd = Random(5)
         var total = 0; var hits = 0; var falsePos = 0
+        val missed = ArrayList<String>()
         val names = COLORS.keys.toList()
         for (trial in 0 until 60) {
             val lanes = Lane.values().toList().shuffled(rnd).take(1 + rnd.nextInt(3))
@@ -157,10 +158,14 @@ class DetectorSyntheticTest {
                 total++
                 val idx = dets.indices.filter { it !in used }.maxByOrNull { iou(dets[it].box, box) }
                 if (idx != null && iou(dets[idx].box, box) >= 0.5f) { hits++; used += idx }
+                else {
+                    val c = cars.first { it.lane == lane }
+                    missed += "t$trial/$lane d=${c.depthU} rgb=${c.rgb.toList()} box=$box dets=${dets.map { it.box }}"
+                }
             }
             falsePos += dets.size - used.size
         }
-        assertTrue("Recall $hits/$total demasiado bajo", hits.toFloat() / total >= 0.95f)
+        assertTrue("Recall $hits/$total demasiado bajo; fallos: ${missed.joinToString(" | ")}", hits.toFloat() / total >= 0.95f)
         assertEquals("Falsos positivos", 0, falsePos)
     }
 
