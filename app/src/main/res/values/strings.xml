@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FarKs AutoPilot</string>
+    <string name="accessibility_label">FarKs AutoPilot (gestos)</string>
+    <string name="accessibility_description">Permite a FarKs AutoPilot deslizar el dedo a izquierda o derecha SOLO dentro del juego que usted elija, y saber qué aplicación está en primer plano. No lee el contenido de la pantalla.</string>
+</resources>
